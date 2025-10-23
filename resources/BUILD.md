@@ -2,19 +2,8 @@
 
 ## Running the Service
 
-- Launch with log filtering via `./run` or `DEBUG_PREFIX=<tag> ./run`(see when to use DEBUG_PREFIX below)
+- Launch with log filtering via `./dist/auto-run`, it quickly exits and gives you log file to tail with
 - Rerunning the server handles killing+restarting the process.
-
-## Targeted Logging
-
-- Attach a structured log with a `prefix` field when debugging/testing specific flows/group of logs
-  ```go
-  log.From(ctx).Info("worksheet skeleton built",
-      zap.String("prefix", "spec"),
-      zap.Any("data", skeleton),
-  )
-  ```
-- Start the service with the matching `DEBUG_PREFIX` value (`DEBUG_PREFIX=spec ./run`) to stream only events where `key=="prefix"` and `value=="spec"`. Pick any tag that suits the scenario; `spec` above is just an illustration.
 
 ## Worksheet Plan Scripts
 
@@ -27,3 +16,33 @@
 
 - Run ad-hoc queries with `cypher-safe --preset resources-dev`. Invoke `cypher-safe` skill for detailed instructions.
 - When a Cypher query of roughly 10+ lines fails, dump the full statement plus parameters to the log and invoke `db-oracle` skill for troubleshooting before retrying.
+
+## Preset queries for quick testing
+
+Modify these to suit your needs.
+
+```cypher
+// Lesson plan inspect query
+MATCH (lp:LessonPlan{id:"3139ee5f-8984-4141-868a-24886753935e"})-[:PLANS]-(l:Lesson)
+OPTIONAL MATCH (l)-[:CONTAINS]-(ls:LessonSection)
+OPTIONAL MATCH (ls)-[:HAS]-(sk:Skill)
+WITH lp, l, ls, sk
+
+CALL {
+    WITH ls
+    OPTIONAL MATCH (ls)-[:INCLUDES]-(lpn:LessonPlanNode)
+    RETURN lpn
+}
+RETURN lp, l, ls, sk, lpn
+```
+
+```cypher
+// WSPLAN:: Worksheet plan node inspect query
+MATCH (lp:LessonPlan {id:"lp_01K81C3SYPYKXXDX7NB1E3M7E0"})-[*1..3]->(n:LessonPlanNode)
+OPTIONAL MATCH (n)--(q:Question|UserQuestion)
+WITH DISTINCT n, lp, q
+WHERE NOT n:LessonPlanSkill AND NOT n:LessonPlanSkills AND NOT n:LessonPlanLessonAgenda AND NOT n:LessonPlanLearningGoals AND NOT n:LessonPlanSkillSlide
+//RETURN labels(n), n.enabled, n.ready
+//RETURN count(q)
+RETURN lp, n, q
+```
