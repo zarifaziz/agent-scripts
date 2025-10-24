@@ -70,6 +70,15 @@ func NewExportConfig() *ExportConfig {
 			"github.com/rlch/neogo",
 			"github.com/rlch/neogo/db",
 			"github.com/rlch/neogo/query",
+			"github.com/MathGaps/neo4j-tooling",
+			"github.com/MathGaps/neo4j-tooling/v2",
+			"github.com/MathGaps/neo4j-tooling/v2/pkg/neo4jclient",
+			"github.com/MathGaps/neo4j-tooling/v2/pkg/data/operations",
+			"github.com/MathGaps/neo4j-tooling/v2/pkg/data/repositoryimpl",
+			"github.com/MathGaps/neo4j-tooling/v2/pkg/domain",
+			"github.com/neo4j/neo4j-go-driver/v5/neo4j",
+			"neo4jclient.Execute",
+			"query.Query",
 		},
 		BlockPatterns: []string{
 			".Exec(",
@@ -98,6 +107,45 @@ const (
 var VALID_POD_PREFIXES = map[string]bool{
 	"resources": true,
 	"learning":  true,
+}
+
+var cypherLineIndicators = []string{
+	" MATCH ",
+	"MATCH (",
+	"OPTIONAL MATCH",
+	"UNWIND ",
+	"FOREACH ",
+	"MERGE ",
+	"MERGE(",
+	"CALL ",
+	"CALL{",
+	"CALL(",
+	"RETURN ",
+	"CREATE ",
+	"DETACH DELETE",
+	"DELETE ",
+	"SET ",
+	"YIELD ",
+	"APOC.",
+	"apoc.",
+}
+
+var cypherContentIndicators = []string{
+	"MATCH ",
+	"MERGE ",
+	"CALL ",
+	"UNWIND ",
+	"RETURN ",
+	"CREATE ",
+	"DETACH DELETE",
+	"DELETE ",
+	"FOREACH ",
+	"SET ",
+	"YIELD ",
+	"apoc.",
+	"neo4jclient.ExecuteRead",
+	"neo4jclient.ExecuteWrite",
+	"ManagedTransaction",
 }
 
 type Neo4jUsageExporter struct {
@@ -186,7 +234,6 @@ func (e *Neo4jUsageExporter) exportNeogoUsage() error {
 
 		return nil
 	})
-
 	if err != nil {
 		return err
 	}
@@ -225,13 +272,23 @@ func (e *Neo4jUsageExporter) collectBlocks(path, relativePath string) ([]string,
 		return nil, nil
 	}
 
-	if filepath.Ext(path) == ".py" {
+	ext := filepath.Ext(path)
+	if ext == ".py" {
 		return nil, nil
 	}
 
 	contentStr := string(content)
-	if filepath.Ext(path) == ".go" && !e.usesNeogo(contentStr) {
-		return nil, nil
+	switch ext {
+	case ".go":
+		if !e.usesNeogo(contentStr) && !containsCypherIndicators(contentStr) {
+			return nil, nil
+		}
+	case ".cypher":
+		// always include cypher scripts
+	default:
+		if !containsCypherIndicators(contentStr) {
+			return nil, nil
+		}
 	}
 
 	lines := strings.Split(contentStr, "\n")
@@ -368,6 +425,24 @@ func (e *Neo4jUsageExporter) lineHasPattern(line string) bool {
 			return true
 		}
 	}
+	return isCypherLine(stripped)
+}
+
+func containsCypherIndicators(text string) bool {
+	for _, indicator := range cypherContentIndicators {
+		if strings.Contains(text, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCypherLine(line string) bool {
+	for _, indicator := range cypherLineIndicators {
+		if strings.Contains(line, indicator) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -475,7 +550,6 @@ func (e *Neo4jUsageExporter) gatherAPIContents(subdir string) ([]string, error) 
 		}
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
