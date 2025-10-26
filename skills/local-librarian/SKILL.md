@@ -9,7 +9,7 @@ metadata:
 
 # Local Librarian
 
-A specialized codebase understanding agent that helps search and analyze local repositories. It acts as your personal multi-repository code expert, exploring local filesystems to answer questions about architecture, functionality, and implementation patterns.
+A specialized codebase understanding agent that searches and analyzes local repositories. Acts as your personal code expert for exploring filesystems, understanding architecture, and explaining implementations.
 
 ## CLI Paths
 
@@ -18,129 +18,93 @@ A specialized codebase understanding agent that helps search and analyze local r
 
 ## Usage
 
-The tool accepts prompts via stdin pipes or heredocs. **You must always specify the directory/scope to search in your prompt.**
-
-### Basic Syntax
-
 ```bash
-# Heredoc (recommended)
-local-librarian <<EOF
-Search ~/Coding/mathgaps-org to find how spans and logs from backend 
-applications are processed and uploaded to Grafana. Look for OpenTelemetry
-integration and Grafana Loki/Tempo configuration.
+# Specify directory in prompt (recommended)
+local-librarian <<'EOF'
+Search ~/Coding/mathgaps-org to find...
 EOF
 
-# Pipe from echo
-echo "Search ~/Coding/my-project to find authentication middleware implementation" | local-librarian
-
-# Pipe from file
-cat question.txt | local-librarian
-```
-
-## Search Directory
-
-When using local-librarian, you can either:
-1. **Specify the directory** to search in your prompt (recommended for clarity)
-2. **Let it default** to your current working directory (where you invoke the command)
-
-✅ **Good examples:**
-```bash
-# Explicit directory (recommended)
-local-librarian <<EOF
-Search ~/Coding/mathgaps-org to find how the learning platform 
-handles user enrollment and course progress tracking.
-EOF
-```
-
-```bash
-# Using current directory as default
-cd ~/Coding/backend-services
-local-librarian <<EOF
-Find how the API gateway routes requests to microservices.
-EOF
-```
-
-```bash
-local-librarian <<EOF
-Explore ~/Coding/frontend-app to find how the React components
-handle state management and API calls.
-EOF
-```
-
-⚠️ **Works but less clear:**
-```bash
-# Will search current directory - might be confusing if you forget where you are
-local-librarian <<EOF
+# Or use current directory as default
+cd ~/Coding/my-project
+local-librarian <<'EOF'
 Find how authentication works
 EOF
 ```
 
+Prompts via **stdin only**. Operates from `~` with read-only access. Defaults to current working directory if no directory specified.
+
 ## How It Works
 
-The local-librarian has access to local filesystem tools:
-- List repositories (including git submodules)
-- List directory contents
-- Read file contents
-- Find files by pattern (glob)
-- Search code with regex
-- Search git commit history
-- View diffs and changes
+Local equivalent of GitHub Librarian with tools for:
+- Finding repositories (including git submodules)
+- Listing directories and reading files
+- Searching code patterns (ripgrep/grep)
+- Searching git commits and viewing diffs
+- Glob pattern file matching
 
-It operates from your home directory (`~`) with read-only access.
+## Example: Detailed Search
 
-## Example Queries
-
-### Find specific functionality
 ```bash
-local-librarian <<EOF
-Search ~/Coding/mathgaps-org repositories to find how OpenTelemetry 
-spans and logs are collected and exported to Grafana. Include:
-- Span creation and attribute setting
-- Log processing and formatting
-- Grafana Loki/Tempo configuration
-- Export/upload mechanisms
+local-librarian <<'EOF'
+Search ~/Coding/mathgaps-org to find how OpenTelemetry spans and logs 
+are collected and exported to Grafana.
+
+## Context
+Need to understand the complete observability pipeline - how traces and logs 
+get from application code to Grafana dashboards.
+
+## Looking For
+- Where spans are created in application code
+- Log formatting and structure
+- OpenTelemetry configuration
+- Grafana Loki and Tempo setup
+- Data flow: app → collector → storage → visualization
+
+## Questions
+1. How are spans created and enriched with attributes?
+2. What log format is used and how are logs correlated with traces?
+3. Where is the OpenTelemetry collector configured?
+4. How is Grafana configured to query Loki and Tempo?
 EOF
 ```
 
-### Understand architecture
+## Example: Quick Searches
+
 ```bash
-local-librarian <<EOF
-Analyze ~/Coding/microservices-app to explain the overall architecture:
-- How services communicate
-- Database connections
-- Message queue usage
-- API endpoints and routing
+# Architecture overview
+local-librarian <<'EOF'
+Search ~/Coding/backend-services to explain the microservices architecture.
+What services exist? How do they communicate? Database per service?
+EOF
+
+# Trace implementation
+local-librarian <<'EOF'
+Search ~/Coding/web-app to trace authentication flow from login form 
+submission through JWT validation to protected routes.
+EOF
+
+# Find patterns
+cd ~/Coding/api-service
+local-librarian <<'EOF'
+Find all error handling patterns. How are database errors caught and reported?
+EOF
+
+# Configuration
+local-librarian <<'EOF'
+Search ~/Coding/infrastructure to find how environment config works.
+What format? Where are values defined? How to add new config?
 EOF
 ```
 
-### Trace implementation
-```bash
-local-librarian <<EOF
-In ~/Coding/web-app, trace how user authentication flows from login 
-form submission through JWT validation to protected route access.
-EOF
-```
+## Best Practices
 
-### Debug or troubleshoot
-```bash
-local-librarian <<EOF
-Search ~/Coding/api-service to find all error handling patterns,
-specifically looking for how database errors are caught and reported.
-EOF
-```
+**✅ DO:**
+- Specify directory explicitly or cd there first
+- Provide context about what you're trying to understand
+- Ask specific questions
+- Use structured format (Context, Looking For, Questions)
 
-## Tips for Best Results
-
-1. **Be specific** about what you're looking for
-2. **Always include** the directory to search
-3. **Provide context** about what you're trying to achieve
-4. **Mention specific technologies** if relevant (e.g., "OpenTelemetry", "Redis", "PostgreSQL")
-5. **Ask for examples** if you want to see actual code snippets
-
-## Notes
-
-- The agent explores **local repositories only** (not GitHub)
-- It has **read-only access** to your filesystem
-- Works with git repositories, including **submodules**
-- Best for **multi-step analysis** across multiple repositories
-- Provides detailed explanations with code examples and file paths
+**❌ DON'T:**
+- Be vague ("Find auth stuff")
+- Skip context
+- Use command-line arguments for prompts
