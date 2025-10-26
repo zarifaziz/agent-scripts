@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# skills.info.sh - Extract and display skill information from SKILL.md files
+# Scans all subdirectories for SKILL.md files and extracts name and description from frontmatter
+
+# Find all SKILL.md files in subdirectories
+find . -type f -name "SKILL.md" | while read -r skill_file; do
+    # Extract frontmatter content (between the two --- markers)
+    frontmatter=$(awk '/^---$/{flag=!flag; next} flag' "$skill_file")
+    
+    # Extract name (line starting with "name:")
+    name=$(echo "$frontmatter" | grep '^name:' | sed 's/^name: *//' | tr -d '"' | tr -d "'")
+    
+    # Extract description (line starting with "description:")
+    # Handle multi-line descriptions by taking everything after "description:" until next field or end
+    description=$(echo "$frontmatter" | awk '/^description:/{flag=1; sub(/^description: */, ""); print; next} flag && /^[a-z-]+:/{flag=0} flag' | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ *//' | sed 's/ *$//' | tr -d '"' | tr -d "'")
+    
+    # If we found both name and description, print them
+    if [ -n "$name" ] && [ -n "$description" ]; then
+        echo "$name: $description"
+    fi
+done | sort
