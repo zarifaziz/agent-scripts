@@ -1,5 +1,5 @@
 ---
-name: project-oracle
+name: autist
 description: Consult a project-focused agent with deep reasoning capabilities for code analysis, refactoring, and development tasks.
 allowed-tools:
   - bash
@@ -7,30 +7,30 @@ metadata:
   version: "1.0"
 ---
 
-# Project Oracle
+# Autist
 
 A project-aware agent with deep reasoning capabilities for code analysis, refactoring, planning, and complex development tasks.
 
 ## CLI Paths
 
-- Primary: `project-oracle`
-- Fallback: `$HOME/.local/bin/project-oracle`
+- Primary: `autist`
+- Fallback: `$HOME/.local/bin/autist`
 
 ## Usage
 
 ```bash
 # Basic
-project-oracle <<'EOF'
+autist <<'EOF'
 [your prompt]
 EOF
 
 # Resume session
-project-oracle -s <session-id> <<'EOF'
+autist -s <session-id> <<'EOF'
 [follow-up prompt]
 EOF
 
 # Control reasoning depth
-project-oracle -r high <<'EOF'  # low|medium|high
+autist -r high <<'EOF'  # low|medium|high
 [complex prompt needing deep analysis]
 EOF
 ```
@@ -55,7 +55,7 @@ Prompts must come via **stdin** (heredoc, pipe, or redirect). The tool uses your
 ```bash
 cd ~/project/backend
 
-project-oracle <<'EOF'
+autist <<'EOF'
 ## Context
 
 Building user authentication with email/password + OAuth (Google, GitHub).
@@ -89,14 +89,14 @@ EOF
 
 ```bash
 # Planning
-project-oracle <<'EOF'
+autist <<'EOF'
 Need to implement real-time collaboration for document editor.
 What's the best architecture? WebSocket vs SSE?
 How to handle conflicts (OT vs CRDT)?
 EOF
 
 # Bug hunting
-project-oracle <<'EOF'
+autist <<'EOF'
 Intermittent 500 errors on /api/orders (1 in 50 requests).
 Logs show "database connection lost" but DB is healthy.
 Only happens in production under load. Started after connection pooling changes.
@@ -107,7 +107,7 @@ Where's the bug?
 EOF
 
 # Refactoring
-project-oracle <<'EOF'
+autist <<'EOF'
 user_service.go is 2000+ lines - unmaintainable.
 How to break it into smaller services/packages?
 Big bang vs incremental refactor?

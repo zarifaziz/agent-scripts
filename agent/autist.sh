@@ -21,9 +21,9 @@ while [[ $# -gt 0 ]]; do
     echo "  -h, --help                  Show this help message" >&2
     echo "" >&2
     echo "Examples:" >&2
-    echo "  project-oracle \"analyze this codebase\"" >&2
-    echo "  echo \"refactor the auth module\" | project-oracle" >&2
-    echo "  project-oracle -s abc123 <<EOF" >&2
+    echo "  autist \"analyze this codebase\"" >&2
+    echo "  echo \"refactor the auth module\" | autist" >&2
+    echo "  autist -s abc123 <<EOF" >&2
     echo "  continue from where we left off" >&2
     echo "  EOF" >&2
     exit 0
@@ -70,12 +70,12 @@ else
 fi
 
 # Setup logging
-LOG_DIR="${HOME}/.cache/scripts/project-oracle"
+LOG_DIR="${HOME}/.cache/scripts/autist"
 mkdir -p "$LOG_DIR"
 
 timestamp="$(date "+%Y%m%dT%H%M%S")"
 log_file="$LOG_DIR/${timestamp}-$$.log"
-output_file="/tmp/project-oracle-output-$$.txt"
+output_file="/tmp/autist-output-$$.txt"
 
 # Execute codex with the detected directory
 set +e
@@ -110,7 +110,7 @@ if [ $exit_code -eq 0 ]; then
   # Extract and display session ID for follow-ups
   extracted_session_id="$(grep -oE 'session id: [[:alnum:]-]+' "$log_file" | cut -d' ' -f3)"
   if [ -n "$extracted_session_id" ]; then
-    printf "\n--------------\nTo follow up on this conversation! use the command: project-oracle -s %s <prompt via pipe|heredoc>\n" "$extracted_session_id"
+    printf "\n--------------\nTo follow up on this conversation! use the command: autist -s %s <prompt via pipe|heredoc>\n" "$extracted_session_id"
   fi
 
   # Show where logs are stored
