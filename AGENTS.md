@@ -1,10 +1,5 @@
 # Skills
 
-When you're asked to use 'X' skill, look for the skill documentation inside ~/.opencode/skills/ folders and subfolders.
-The Available skills are (but not limited to):
-
-## Custom User Tools
-
 Skills: Skills are markdown files with detailed instruction to use a ability, when the user says use X skill where X=Skill name please search the directory ~/.opencode/skills/<name> and read the SKILL.md file from it. For example to use 'project-oracle' skill you'll look into ~/.opencode/skills/project-oracle/SKILL.md and follow the guide there
 
 ## Available skills are (but not limited to):
