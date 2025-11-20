@@ -29,10 +29,6 @@ autist -s <session-id> <<'EOF'
 [follow-up prompt]
 EOF
 
-# Control reasoning depth
-autist -r high <<'EOF'  # low|medium|high
-[complex prompt needing deep analysis]
-EOF
 ```
 
 Prompts must come via **stdin** (heredoc, pipe, or redirect). The tool uses your current working directory as context.
@@ -40,12 +36,14 @@ Prompts must come via **stdin** (heredoc, pipe, or redirect). The tool uses your
 ## When to Use
 
 **✅ USE FOR:**
+
 - Code reviews and architecture feedback
 - Planning complex implementations or refactoring
 - Bug analysis across multiple files
 - Deep technical questions requiring reasoning
 
 **❌ DON'T USE FOR:**
+
 - Simple file reading (use `cat`, `less`)
 - Basic searches (use `grep`, `rg`, `local-librarian`)
 - Trivial code changes (just edit it)
@@ -114,8 +112,56 @@ Big bang vs incremental refactor?
 EOF
 ```
 
+## Handling Timeouts (300 Second Limit)
+
+**⚠️ CORE ISSUE:** Autist may take longer than 300 seconds for complex analysis/refactoring tasks, causing tool execution to timeout.
+
+**✅ SOLUTION:** The session ID is displayed **immediately** at the start of execution (not just at completion). If a timeout occurs:
+
+1. **Copy the session ID** shown at the beginning of the output
+2. **Continue the session** with a simple "continue" prompt:
+
+```bash
+autist -s <session-id> <<'EOF'
+continue
+EOF
+```
+
+This allows autist to complete its work without losing context or progress.
+
+### Example Timeout Recovery
+
+```bash
+# Initial command times out after 300 seconds
+autist <<'EOF'
+Refactor the entire auth system for better testability
+EOF
+
+# Output shows:
+# --------------
+# To continue this session (in case of timeout), use: autist -s abc-123-def
+# --------------
+# [... timeout occurs ...]
+
+# Simply continue the session:
+autist -s abc-123-def <<'EOF'
+continue
+EOF
+
+# Autist resumes and completes the work
+```
+
+**When to expect timeouts:**
+- Large-scale refactoring across many files
+- Deep code analysis with extensive reasoning
+- Complex multi-step architectural changes
+- Comprehensive bug hunting across large codebases
+
+**Best practice:** For very large tasks, break them into smaller subtasks or be prepared to continue the session if timeout occurs.
+
 ## Notes
 
 - Automatically uses current working directory
-- Session IDs shown after each run for follow-ups
+- Session IDs shown **twice**: immediately (for timeout recovery) and at completion (for follow-ups)
 - Can read files, search code, execute commands in your project
+- Always monitor the initial session ID output for timeout recovery

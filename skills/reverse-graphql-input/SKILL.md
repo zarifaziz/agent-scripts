@@ -314,6 +314,16 @@ fi
 # 6. Format and present result
 ```
 
+#### 4C. For Lesson Plans V3 (New Structure)
+
+For the new `createLessonPlanV3` with nested lesson structures, skill sections, and practice nodes:
+
+```bash
+cypher-safe --preset resources-dev --params '{"lpID":"lp_xxx"}' "$(cat ~/.opencode/skills/reverse-graphql-input/reverse_v3.cypher)"
+```
+
+See `reverse_v3.cypher` in this directory for the full query. Handles introductionNodes, skillSections (with templateConfig), and practiceNodes (with cardConfig).
+
 ## Notes
 
 - Always use cypher-safe skill for database queries

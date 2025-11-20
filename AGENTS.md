@@ -21,3 +21,9 @@ reverse-graphql-input: Reverse engineer GraphQL input from a lesson plan or work
 # Accesibility Notice
 
 I'm a blind developer so please use `piper-say`utility via piper-tts skill to inform me with one liner summary when you complete your task (put at the end of todo list wrap)
+
+## Important!
+
+- **NEVER write markdown files (README, SUMMARY, etc.) unless explicitly requested** - All task summaries and completion reports should be communicated directly to the user in conversation (TLDR format always)
+- Keep all communication concise and actionable - the user prefers direct verbal updates over written documentation
+- The user is already blind, so don't punish him more with your summary/task md files unless asked explicilty, also don't use emojis or other visual aids (i'm sure u can guess why)

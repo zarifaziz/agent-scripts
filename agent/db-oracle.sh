@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# Summary: Pipe-only wrapper that feeds stdin prompts into the db-oracle opencode agent.
+# Description:
+# Requires the -db flag, ensures prompts are provided via stdin, and optionally records additional project directories.
+# Builds a final prompt string that includes referenced directories and the piped query before calling opencode.
+# Runs from ~/Coding/metarepo, captures stderr into a temp log, and flushes a cleaned log into ~/.cache/scripts/oracle-logs.
+# Prints the final log when verbose and otherwise echoes the agent output, making it easy to inspect failures.
+
 set -euo pipefail
 
 db=""
@@ -111,13 +118,17 @@ cd "$HOME/Coding/metarepo"
 
 set +e
 if [ "$verbose" = true ]; then
-  opencode run --agent db-oracle "${args[@]}" 2>"$log_file"
+  opencode run --agent db-oracle "${args[@]}" 2>"${log_file}.tmp"
   exit_code=$?
 else
-  opencode run --agent db-oracle "${args[@]}" 2>"$log_file"
+  opencode run --agent db-oracle "${args[@]}" 2>"${log_file}.tmp"
   exit_code=$?
 fi
 set -e
+
+# Filter out binary data from log file
+strings "${log_file}.tmp" > "$log_file"
+rm -f "${log_file}.tmp"
 
 if [ $exit_code -eq 0 ]; then
   if [ "$verbose" = false ]; then

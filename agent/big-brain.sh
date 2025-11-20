@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# Summary: Runs the opencode big-brain agent and extracts only its user-facing response.
+# Description:
+# Redirects the agent output to a temp file and then strings the binary output into a cached log under ~/.cache/scripts/big-brain.
+# Looks for <output> tags and prints just the clean body when possible, removing tooling noise.
+# Falls back to Claude Haiku extraction with retries if tags are missing, filtering out plugin/status chatter.
+# Echoes detailed failure diagnostics including the raw log tail when the response cannot be extracted.
+
 set -euo pipefail
 
 # Capture the directory from which this script was invoked
@@ -67,11 +74,11 @@ opencode run --agent big-brain "$prompt" >"$full_output_file" 2>&1
 exit_code=$?
 set -e
 
-# Save full output to log
-cp "$full_output_file" "$log_file"
+# Save full output to log (use strings to filter out binary data)
+strings "$full_output_file" > "$log_file"
 
-# Try to extract <output></output> tags
-extracted_output=$(sed -n '/<output>/,/<\/output>/p' "$full_output_file" | sed '1d;$d')
+# Try to extract <output></output> tags (filter binary first)
+extracted_output=$(strings "$full_output_file" | sed -n '/<output>/,/<\/output>/p' | sed '1d;$d')
 
 if [ -n "$extracted_output" ]; then
   # Successfully extracted output
@@ -87,7 +94,7 @@ extraction_prompt="Extract the agent's response from this log. Remove all tool u
 
 Log content:
 ---
-$(cat "$full_output_file")
+$(strings "$full_output_file")
 ---"
 
 max_retries=3

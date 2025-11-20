@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# Summary: Runs the local-librarian agent on piped prompts while keeping structured logs.
+# Description:
+# Reads stdin prompts, combines them with the invoking directory context, and runs opencode with the local-librarian agent.
+# Writes cleaned output via strings into ~/.cache/scripts/local-librarian-logs and then prints the answer.
+# Supports a -v verbose flag that leaves opencode stderr unfiltered for debugging.
+# Always executes from $HOME to give the agent access to every repository and respects the trap semantics.
+
 set -euo pipefail
 
 # Capture the directory from which this script was invoked
@@ -75,13 +82,17 @@ cd "$HOME"
 
 set +e
 if [ "$verbose" = true ]; then
-  opencode run --agent local-librarian "${args[@]}" 2>"$log_file"
+  opencode run --agent local-librarian "${args[@]}" 2>"${log_file}.tmp"
   exit_code=$?
 else
-  opencode run --agent local-librarian "${args[@]}" 2>"$log_file"
+  opencode run --agent local-librarian "${args[@]}" 2>"${log_file}.tmp"
   exit_code=$?
 fi
 set -e
+
+# Filter out binary data from log file
+strings "${log_file}.tmp" > "$log_file"
+rm -f "${log_file}.tmp"
 
 if [ $exit_code -eq 0 ]; then
   if [ "$verbose" = false ]; then

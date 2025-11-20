@@ -10,6 +10,17 @@ import (
 	"github.com/rlch/neogo"
 )
 
+func isExplainOrProfile(query string) (isExplainProfile bool, keyword string) {
+	trimmed := strings.TrimSpace(strings.ToUpper(query))
+	if strings.HasPrefix(trimmed, "EXPLAIN") {
+		return true, "EXPLAIN"
+	}
+	if strings.HasPrefix(trimmed, "PROFILE") {
+		return true, "PROFILE"
+	}
+	return false, ""
+}
+
 func executeRawQuery(ctx context.Context, client neogo.Driver, cypherQuery string, params map[string]any, outputFormat string, readOnly bool) error {
 	trimmedQuery := strings.TrimSpace(cypherQuery)
 
@@ -29,6 +40,9 @@ func executeRawQuery(ctx context.Context, client neogo.Driver, cypherQuery strin
 
 	var results []map[string]any
 	var executeErr error
+	var summary neo4j.ResultSummary
+
+	isExplainProfile, _ := isExplainOrProfile(trimmedQuery)
 
 	if readOnly {
 		_, executeErr = session.ExecuteRead(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
@@ -37,13 +51,28 @@ func executeRawQuery(ctx context.Context, client neogo.Driver, cypherQuery strin
 				return nil, err
 			}
 
-			records, err := result.Collect(ctx)
-			if err != nil {
-				return nil, err
-			}
+			if isExplainProfile {
+				for result.Next(ctx) {
+					results = append(results, result.Record().AsMap())
+				}
 
-			for _, record := range records {
-				results = append(results, record.AsMap())
+				if err := result.Err(); err != nil {
+					return nil, err
+				}
+
+				summary, err = result.Consume(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get result summary: %w", err)
+				}
+			} else {
+				records, err := result.Collect(ctx)
+				if err != nil {
+					return nil, err
+				}
+
+				for _, record := range records {
+					results = append(results, record.AsMap())
+				}
 			}
 
 			return nil, nil
@@ -55,13 +84,28 @@ func executeRawQuery(ctx context.Context, client neogo.Driver, cypherQuery strin
 				return nil, err
 			}
 
-			records, err := result.Collect(ctx)
-			if err != nil {
-				return nil, err
-			}
+			if isExplainProfile {
+				for result.Next(ctx) {
+					results = append(results, result.Record().AsMap())
+				}
 
-			for _, record := range records {
-				results = append(results, record.AsMap())
+				if err := result.Err(); err != nil {
+					return nil, err
+				}
+
+				summary, err = result.Consume(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("failed to get result summary: %w", err)
+				}
+			} else {
+				records, err := result.Collect(ctx)
+				if err != nil {
+					return nil, err
+				}
+
+				for _, record := range records {
+					results = append(results, record.AsMap())
+				}
 			}
 
 			return nil, nil
@@ -77,6 +121,19 @@ func executeRawQuery(ctx context.Context, client neogo.Driver, cypherQuery strin
 			}
 		}
 		return fmt.Errorf("failed to execute query: %w", executeErr)
+	}
+
+	if isExplainProfile && summary != nil {
+		plan := summary.Plan()
+		profile := summary.Profile()
+		
+		if profile != nil {
+			return printExecutionPlan(profile, outputFormat)
+		} else if plan != nil {
+			return printExecutionPlan(plan, outputFormat)
+		} else {
+			return fmt.Errorf("query executed but no execution plan available in summary")
+		}
 	}
 
 	return printResults(results, outputFormat)
