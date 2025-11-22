@@ -1,0 +1,31 @@
+{
+  "otelKeys": [
+    "traceID",
+    "traceSampled",
+    "severity",
+    "time",
+    "caller",
+    "requestID",
+    "userID",
+    "authorizedUserID",
+    "spanID",
+    "parentSpanID"
+  ],
+  "providerKeys": [
+    "model",
+    "modelType",
+    "provider",
+    "baseURL",
+    "architecture",
+    "maxTokens",
+    "maxCompletionTokens",
+    "temperature",
+    "isReasoningModel",
+    "topP",
+    "frequencyPenalty",
+    "presencePenalty",
+    "contextWindow",
+    "inferenceSpeed",
+    "apiCallDurationMs"
+  ]
+}

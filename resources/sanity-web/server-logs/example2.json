@@ -1,0 +1,1 @@
+{"severity":"ERROR","time":"2025-11-07T10:30:00+05:45","caller":"auth/handler.go:123","message":"Authentication failed","traceID":"abc123def456","userID":"user_12345","error":{"domain":"auth.validateToken","messages":"Invalid token format\nExpected JWT but got malformed string\nPlease check your authorization header"}}

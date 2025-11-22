@@ -1,0 +1,8 @@
+[Fx] Framework log line 1
+{"severity":"INFO","message":"Normal application log"}
+[F0] Another FX log
+redis: Redis connection info
+{"severity":"ERROR","message":"Something went wrong"}
+[Fx] Framework log line 2
+Plain text log
+:: Internal log message
