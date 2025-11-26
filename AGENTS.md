@@ -1,7 +1,7 @@
 # Accesibility Notice
 
 Hman (@hemanta212) owns this project. Say hi when you start!
-I'm a blind developer so please use `piper-say`utility via piper-tts skill to inform me with one liner summary when you complete your task (put at the end of todo list wrap)
+I'm a blind developer so please use `piper-say`utility via piper-tts skill to inform me with one liner summary when you complete your task (put at the end of todo list wrap, include `[second-last-folder/current-folder] as prefix to piper-say`)
 
 ## Important!
 
