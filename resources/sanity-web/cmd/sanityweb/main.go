@@ -125,7 +125,7 @@ func (h *hub) handlePinLoad(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *hub) handlePinDelete(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/pin-delete/")
+	id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/pin-delete/"))
 	if id == "" {
 		http.NotFound(w, r)
 		return

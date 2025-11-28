@@ -85,7 +85,26 @@ th { color: var(--muted); font-weight: 600; width: 30%; }
   cursor: pointer;
 }
 .code-block-wrapper { position: relative; }
+.code-block-wrapper pre { padding-right: 160px; }
 .code-block-wrapper .copy-btn { position: absolute; top: 6px; right: 8px; }
+.code-block-wrapper .preview-toggle { position: absolute; top: 6px; right: 60px; display:flex; align-items:center; gap:4px; font-size:11px; color: var(--muted);}
+.preview-card {
+  position: fixed;
+  top: 24px;
+  left: 24px;
+  max-width: 520px;
+  background: #0f131a;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  padding: 12px 14px;
+  z-index: 200;
+  display: none;
+}
+.preview-card h4 { margin: 0 0 6px 0; font-size: 14px; color: var(--accent); }
+.preview-card .section { margin-bottom: 10px; }
+.preview-card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+.preview-card .qa { margin-bottom: 6px; }
 details.nested { margin: 0; border-top: 1px solid var(--border); }
 details.nested > summary {
     padding: 8px 12px;
@@ -100,3 +119,6 @@ details.nested > summary {
 details.nested > summary:hover { color: var(--text); background: rgba(0,0,0,0.3); }
 details.nested > summary::-webkit-details-marker { display: none; }
 details.nested[open] > summary { border-bottom: 1px solid var(--border); }
+.katex { font-size: 1.1em; }
+.katex-display { margin: 0.5em 0; }
+pre .katex { color: #cbe3ff; }

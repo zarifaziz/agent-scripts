@@ -119,12 +119,21 @@ function renderIncremental(r) {
     const card = document.getElementById(`log-${key}`);
     if (card) {
       const content = card.querySelector('.content');
-      // Append block. 
-      // We need to find where to append. 
-      // For prompt logs, blocks usually go before Output? Or just at end of content?
-      // In previous renderPromptLog, blocks were appended near end.
-      // Let's just append to content for now.
-      content.appendChild(createCollapsibleSection(`Block: ${r.block.path}`, r.block.value, `block:${r.block.path}`, false));
+      const blockPath = r.block.path;
+      
+      // Map common block paths to friendly names
+      const blockLabels = {
+        '/system': 'System Prompt',
+        '/user': 'User Prompt',
+        '/output': 'Output',
+        '/rawOutput': 'Raw Output'
+      };
+      
+      const label = blockLabels[blockPath] || `Block: ${blockPath}`;
+      const persistenceKey = blockLabels[blockPath] ? `log-prompt:${blockPath.substring(1)}` : `block:${blockPath}`;
+      const defaultOpen = blockPath === '/output'; // Only output is open by default
+      
+      content.appendChild(createCollapsibleSection(label, r.block.value, persistenceKey, defaultOpen));
     }
   }
 }
@@ -320,6 +329,28 @@ function createIdIcon(label, value) {
   return span;
 }
 
+function renderKaTeX(text) {
+  // Helper to render KaTeX inline in text
+  if (typeof text !== 'string') return text;
+  
+  const container = document.createElement('div');
+  container.textContent = text;
+  
+  try {
+    renderMathInElement(container, {
+      delimiters: [
+        {left: '$$', right: '$$', display: true},
+        {left: '$', right: '$', display: false}
+      ],
+      throwOnError: false
+    });
+  } catch (e) {
+    console.warn('KaTeX rendering failed:', e);
+  }
+  
+  return container;
+}
+
 function createCollapsibleSection(title, content, persistenceKey, defaultOpen) {
   const details = document.createElement('details');
   details.className = 'nested';
@@ -337,24 +368,41 @@ function createCollapsibleSection(title, content, persistenceKey, defaultOpen) {
   const wrapper = document.createElement('div');
   wrapper.className = 'code-block-wrapper';
 
-  const pre = document.createElement('pre');
-  const textContent = typeof content === 'object' ? JSON.stringify(content, null, 2) : content;
-  pre.textContent = textContent;
-
+  const previewKey = `preview:${persistenceKey}`;
+  
   const copyBtn = document.createElement('button');
   copyBtn.className = 'copy-btn';
   copyBtn.textContent = 'Copy';
+  const textContent = typeof content === 'object' ? JSON.stringify(content, null, 2) : content;
   copyBtn.onclick = (e) => {
     e.stopPropagation();
     navigator.clipboard.writeText(textContent);
     copyBtn.textContent = 'Copied!';
     setTimeout(() => copyBtn.textContent = 'Copy', 1500);
   };
+  
+  const previewToggle = document.createElement('label');
+  previewToggle.className = 'preview-toggle';
+  previewToggle.innerHTML = `<input type="checkbox" ${getToggleState(previewKey, false) ? 'checked' : ''}/> Preview`;
+  
+  wrapper.appendChild(copyBtn);
+  wrapper.appendChild(previewToggle);
+
+  const pre = document.createElement('pre');
+  
+  // Render KaTeX if the content contains $ delimiters
+  if (typeof content === 'string' && content.includes('$')) {
+    const rendered = renderKaTeX(content);
+    pre.innerHTML = '';
+    pre.appendChild(rendered);
+  } else {
+    pre.textContent = textContent;
+  }
 
   // Long Press to Toggle
   let pressTimer;
   wrapper.onmousedown = (e) => {
-    if (e.target === copyBtn) return;
+    if (e.target === copyBtn || e.target === previewToggle || e.target.tagName === 'INPUT') return;
     pressTimer = setTimeout(() => {
       details.open = !details.open;
     }, 500); // 500ms long press
@@ -363,8 +411,27 @@ function createCollapsibleSection(title, content, persistenceKey, defaultOpen) {
   wrapper.onmouseleave = () => clearTimeout(pressTimer);
 
   wrapper.appendChild(pre);
-  wrapper.appendChild(copyBtn);
   details.appendChild(wrapper);
+
+  // Preview hover (only for output sections)
+  const previewBox = ensurePreviewBox();
+  const shouldPreview = () => getToggleState(previewKey, false);
+  const setPreviewState = (checked) => setToggleState(previewKey, checked);
+  const input = previewToggle.querySelector('input');
+  input.onchange = (e) => setPreviewState(e.target.checked);
+
+  const renderPreview = () => {
+    if (!shouldPreview()) return;
+    let parsed;
+    try { parsed = JSON.parse(textContent); } catch { return; }
+    const html = buildPreviewHTML(parsed);
+    if (!html) return;
+    previewBox.innerHTML = html;
+    previewBox.style.display = 'block';
+  };
+
+  pre.addEventListener('mouseenter', renderPreview);
+  pre.addEventListener('mouseleave', () => previewBox.style.display = 'none');
 
   return details;
 }
@@ -608,4 +675,57 @@ function isFocusableSummary(el) {
   if (el.tagName !== 'SUMMARY') return false;
   if (el.getAttribute('aria-hidden') === 'true') return false;
   return true;
+}
+
+function ensurePreviewBox() {
+  let box = document.getElementById('preview-card');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'preview-card';
+    box.className = 'preview-card';
+    document.body.appendChild(box);
+  }
+  return box;
+}
+
+function renderKaTeXInHTML(html) {
+  // Helper to render KaTeX in already-built HTML
+  const temp = document.createElement('div');
+  temp.innerHTML = html;
+  try {
+    renderMathInElement(temp, {
+      delimiters: [
+        {left: '$$', right: '$$', display: true},
+        {left: '$', right: '$', display: false}
+      ],
+      throwOnError: false
+    });
+  } catch (e) {
+    console.warn('KaTeX rendering in preview failed:', e);
+  }
+  return temp.innerHTML;
+}
+
+function buildPreviewHTML(obj) {
+  if (typeof obj !== 'object' || Array.isArray(obj)) return '';
+  // Decide template: priority for lesson Q/A style
+  const levels = ['easy', 'medium', 'hard'].filter(k => obj[k] && typeof obj[k] === 'object');
+  if (levels.length) {
+    const parts = [];
+    if (obj.situation) parts.push(`<div class="section"><div class="label">Situation</div><div>${escapeHtml(obj.situation)}</div></div>`);
+    levels.forEach(lvl => {
+      const sec = obj[lvl];
+      const q = sec.question || '';
+      const a = sec.answer || '';
+      parts.push(`<div class="section"><div class="label">${lvl}</div><div class="qa"><strong>Q:</strong> ${escapeHtml(q)}</div><div class="qa"><strong>A:</strong> ${escapeHtml(a)}</div></div>`);
+    });
+    const html = `<h4>Preview</h4>${parts.join('')}`;
+    return renderKaTeXInHTML(html);
+  }
+  // Generic: show top-level string fields
+  const keys = Object.keys(obj).filter(k => typeof obj[k] === 'string');
+  if (!keys.length) return '';
+  const rows = keys.slice(0, 6).map(k => `<div class="section"><div class="label">${escapeHtml(k)}</div><div>${escapeHtml(obj[k])}</div></div>`);
+  const html = `<h4>Preview</h4>${rows.join('')}`;
+  return renderKaTeXInHTML(html);
 }
