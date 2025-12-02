@@ -71,10 +71,30 @@ async function loadPinAndRender() {
   records.forEach(renderIncremental);
 }
 
+async function loadHistoryAndConnect() {
+  // First, fetch all historical logs from /stream
+  try {
+    const text = await fetchStreamText('/stream');
+    text.split('\n').forEach(line => {
+      if (!line.trim()) return;
+      try {
+        const r = JSON.parse(line);
+        records.push(r);
+      } catch { }
+    });
+    // Render all historical logs
+    records.forEach(renderIncremental);
+  } catch (e) {
+    console.warn('Failed to load history:', e);
+  }
+  // Then connect WebSocket for live updates
+  connect();
+}
+
 if (isPinView) {
   loadPinAndRender();
 } else {
-  connect();
+  loadHistoryAndConnect();
 }
 
 function renderIncremental(r) {
@@ -329,27 +349,7 @@ function createIdIcon(label, value) {
   return span;
 }
 
-function renderKaTeX(text) {
-  // Helper to render KaTeX inline in text
-  if (typeof text !== 'string') return text;
-  
-  const container = document.createElement('div');
-  container.textContent = text;
-  
-  try {
-    renderMathInElement(container, {
-      delimiters: [
-        {left: '$$', right: '$$', display: true},
-        {left: '$', right: '$', display: false}
-      ],
-      throwOnError: false
-    });
-  } catch (e) {
-    console.warn('KaTeX rendering failed:', e);
-  }
-  
-  return container;
-}
+// KaTeX rendering ONLY for preview cards - never in code blocks
 
 function createCollapsibleSection(title, content, persistenceKey, defaultOpen) {
   const details = document.createElement('details');
@@ -369,11 +369,11 @@ function createCollapsibleSection(title, content, persistenceKey, defaultOpen) {
   wrapper.className = 'code-block-wrapper';
 
   const previewKey = `preview:${persistenceKey}`;
+  const textContent = typeof content === 'object' ? JSON.stringify(content, null, 2) : content;
   
   const copyBtn = document.createElement('button');
   copyBtn.className = 'copy-btn';
   copyBtn.textContent = 'Copy';
-  const textContent = typeof content === 'object' ? JSON.stringify(content, null, 2) : content;
   copyBtn.onclick = (e) => {
     e.stopPropagation();
     navigator.clipboard.writeText(textContent);
@@ -381,23 +381,28 @@ function createCollapsibleSection(title, content, persistenceKey, defaultOpen) {
     setTimeout(() => copyBtn.textContent = 'Copy', 1500);
   };
   
+  // Check if preview template exists for this content
+  const templateCheck = hasPreviewTemplate(textContent);
+  
   const previewToggle = document.createElement('label');
   previewToggle.className = 'preview-toggle';
-  previewToggle.innerHTML = `<input type="checkbox" ${getToggleState(previewKey, false) ? 'checked' : ''}/> Preview`;
+  
+  if (templateCheck.has) {
+    previewToggle.innerHTML = `<input type="checkbox" ${getToggleState(previewKey, false) ? 'checked' : ''}/> Preview`;
+  } else {
+    // No template - show disabled checkbox with tooltip
+    previewToggle.innerHTML = `<input type="checkbox" disabled/> <span class="no-template-hint">Preview</span>`;
+    previewToggle.title = `No template registered for this data structure. Copy the JSON and ask your agent to create a preview template.`;
+    previewToggle.style.cursor = 'help';
+    previewToggle.style.opacity = '0.5';
+  }
   
   wrapper.appendChild(copyBtn);
   wrapper.appendChild(previewToggle);
 
   const pre = document.createElement('pre');
-  
-  // Render KaTeX if the content contains $ delimiters
-  if (typeof content === 'string' && content.includes('$')) {
-    const rendered = renderKaTeX(content);
-    pre.innerHTML = '';
-    pre.appendChild(rendered);
-  } else {
-    pre.textContent = textContent;
-  }
+  // Code blocks are plain text - no KaTeX rendering here
+  pre.textContent = textContent;
 
   // Long Press to Toggle
   let pressTimer;
@@ -413,25 +418,28 @@ function createCollapsibleSection(title, content, persistenceKey, defaultOpen) {
   wrapper.appendChild(pre);
   details.appendChild(wrapper);
 
-  // Preview hover (only for output sections)
+  // Preview hover (only when template exists and checkbox is checked)
   const previewBox = ensurePreviewBox();
-  const shouldPreview = () => getToggleState(previewKey, false);
-  const setPreviewState = (checked) => setToggleState(previewKey, checked);
+  const shouldPreview = () => templateCheck.has && getToggleState(previewKey, false);
   const input = previewToggle.querySelector('input');
-  input.onchange = (e) => setPreviewState(e.target.checked);
+  
+  if (templateCheck.has) {
+    const setPreviewState = (checked) => setToggleState(previewKey, checked);
+    input.onchange = (e) => setPreviewState(e.target.checked);
 
-  const renderPreview = () => {
-    if (!shouldPreview()) return;
-    let parsed;
-    try { parsed = JSON.parse(textContent); } catch { return; }
-    const html = buildPreviewHTML(parsed);
-    if (!html) return;
-    previewBox.innerHTML = html;
-    previewBox.style.display = 'block';
-  };
+    const renderPreview = () => {
+      if (!shouldPreview()) return;
+      let parsed;
+      try { parsed = JSON.parse(textContent); } catch { return; }
+      const html = buildPreviewHTML(parsed);
+      if (!html) return;
+      previewBox.innerHTML = html;
+      previewBox.style.display = 'block';
+    };
 
-  pre.addEventListener('mouseenter', renderPreview);
-  pre.addEventListener('mouseleave', () => previewBox.style.display = 'none');
+    pre.addEventListener('mouseenter', renderPreview);
+    pre.addEventListener('mouseleave', () => previewBox.style.display = 'none');
+  }
 
   return details;
 }
@@ -620,7 +628,7 @@ document.addEventListener('keydown', (e) => {
   if (key === 'd' && e.shiftKey) { e.preventDefault(); document.getElementById('fa-download')?.click(); lastKey = ''; return; }
   if (key === 'c' && e.shiftKey) { e.preventDefault(); document.getElementById('fa-copy')?.click(); lastKey = ''; return; }
   if (key === 'p' && e.shiftKey && !isPinView) { e.preventDefault(); document.getElementById('fa-pin')?.click(); lastKey = ''; return; }
-  if (key === 'r' && e.shiftKey && !isPinView) { e.preventDefault(); document.getElementById('fa-reset')?.click(); lastKey = ''; return; }
+  if (key === 'r' && e.shiftKey && !e.ctrlKey && !e.metaKey && !isPinView) { e.preventDefault(); document.getElementById('fa-reset')?.click(); lastKey = ''; return; }
   lastKey = key;
 });
 
@@ -706,26 +714,14 @@ function renderKaTeXInHTML(html) {
   return temp.innerHTML;
 }
 
+// Template detection - delegates to TemplateRegistry
+function hasPreviewTemplate(content) {
+  return TemplateRegistry.check(content);
+}
+
+// Preview rendering - delegates to TemplateRegistry
 function buildPreviewHTML(obj) {
-  if (typeof obj !== 'object' || Array.isArray(obj)) return '';
-  // Decide template: priority for lesson Q/A style
-  const levels = ['easy', 'medium', 'hard'].filter(k => obj[k] && typeof obj[k] === 'object');
-  if (levels.length) {
-    const parts = [];
-    if (obj.situation) parts.push(`<div class="section"><div class="label">Situation</div><div>${escapeHtml(obj.situation)}</div></div>`);
-    levels.forEach(lvl => {
-      const sec = obj[lvl];
-      const q = sec.question || '';
-      const a = sec.answer || '';
-      parts.push(`<div class="section"><div class="label">${lvl}</div><div class="qa"><strong>Q:</strong> ${escapeHtml(q)}</div><div class="qa"><strong>A:</strong> ${escapeHtml(a)}</div></div>`);
-    });
-    const html = `<h4>Preview</h4>${parts.join('')}`;
-    return renderKaTeXInHTML(html);
-  }
-  // Generic: show top-level string fields
-  const keys = Object.keys(obj).filter(k => typeof obj[k] === 'string');
-  if (!keys.length) return '';
-  const rows = keys.slice(0, 6).map(k => `<div class="section"><div class="label">${escapeHtml(k)}</div><div>${escapeHtml(obj[k])}</div></div>`);
-  const html = `<h4>Preview</h4>${rows.join('')}`;
-  return renderKaTeXInHTML(html);
+  const html = TemplateRegistry.render(obj);
+  // Apply KaTeX rendering to the output (for math in previews)
+  return html ? renderKaTeXInHTML(html) : '';
 }

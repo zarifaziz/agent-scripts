@@ -1,0 +1,83 @@
+/**
+ * QA Levels Template Styles
+ * Scoped to .preview-card .tpl-qa-levels
+ */
+
+.preview-card .tpl-qa-levels h4 {
+  margin: 0 0 12px 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-card .qa-section {
+  margin-bottom: 12px;
+}
+
+.preview-card .qa-section:last-child {
+  margin-bottom: 0;
+}
+
+.preview-card .qa-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+
+.preview-card .qa-content {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.preview-card .qa-level-header {
+  margin-bottom: 6px;
+}
+
+.preview-card .qa-level {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.preview-card .qa-level.diff-easy {
+  background: var(--debug-bg);
+  color: var(--debug);
+}
+
+.preview-card .qa-level.diff-medium {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.preview-card .qa-level.diff-hard {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.preview-card .qa-item {
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+
+.preview-card .qa-prefix {
+  font-weight: 600;
+  color: var(--text-2);
+  margin-right: 4px;
+}
+
+.preview-card .qa-answer .qa-prefix {
+  color: var(--debug);
+}

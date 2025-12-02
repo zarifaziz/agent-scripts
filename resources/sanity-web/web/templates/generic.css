@@ -1,0 +1,48 @@
+/**
+ * Generic Template Styles
+ * Scoped to .preview-card .tpl-generic
+ */
+
+.preview-card .tpl-generic h4 {
+  margin: 0 0 12px 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-card .generic-row {
+  margin-bottom: 10px;
+}
+
+.preview-card .generic-row:last-child {
+  margin-bottom: 0;
+}
+
+.preview-card .generic-key {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  margin-bottom: 2px;
+}
+
+.preview-card .generic-value {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.preview-card .generic-more {
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: italic;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}

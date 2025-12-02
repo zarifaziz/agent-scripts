@@ -1,0 +1,135 @@
+/**
+ * MCQ Template Styles
+ * Scoped to .preview-card .tpl-mcq
+ */
+
+.preview-card .tpl-mcq h4 {
+  margin: 0 0 12px 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-card .mcq-question {
+  margin-bottom: 12px;
+}
+
+.preview-card .mcq-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.preview-card .mcq-num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(77, 166, 255, 0.15);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.preview-card .mcq-diff {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.preview-card .mcq-diff.diff-easy {
+  background: var(--debug-bg);
+  color: var(--debug);
+}
+
+.preview-card .mcq-diff.diff-medium {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.preview-card .mcq-diff.diff-hard {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.preview-card .mcq-diff.diff-unknown {
+  background: var(--border);
+  color: var(--text-2);
+}
+
+.preview-card .mcq-body {
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 10px;
+  color: var(--text);
+}
+
+.preview-card .mcq-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.preview-card .mcq-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  transition: all 0.15s;
+}
+
+.preview-card .mcq-option.mcq-correct {
+  background: rgba(77, 255, 136, 0.1);
+  border-color: var(--debug);
+}
+
+.preview-card .mcq-letter {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--text-2);
+  min-width: 18px;
+}
+
+.preview-card .mcq-option.mcq-correct .mcq-letter {
+  color: var(--debug);
+}
+
+.preview-card .mcq-text {
+  flex: 1;
+  color: var(--text);
+}
+
+.preview-card .mcq-check {
+  color: var(--debug);
+  font-weight: 600;
+}
+
+.preview-card .mcq-answer {
+  font-size: 11px;
+  color: var(--text-2);
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+.preview-card .mcq-answer strong {
+  color: var(--debug);
+}
+
+.preview-card .mcq-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}

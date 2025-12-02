@@ -4,15 +4,36 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sanity Web</title>
+  <title>SANITY</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  
+  <!-- KaTeX (only for preview cards) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  
+  <!-- Core Styles -->
   <link rel="stylesheet" href="/style.css">
+  
+  <!-- Template Styles (modular) -->
+  <link rel="stylesheet" href="/templates/mcq.css">
+  <link rel="stylesheet" href="/templates/qa-levels.css">
+  <link rel="stylesheet" href="/templates/generic.css">
 </head>
 
 <body>
   <div id="app"></div>
+  
+  <!-- KaTeX (only for preview cards) -->
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+  
+  <!-- Template System -->
+  <script src="/templates/registry.js"></script>
+  <script src="/templates/mcq.js"></script>
+  <script src="/templates/qa-levels.js"></script>
+  <script src="/templates/generic.js"></script>
+  
+  <!-- Core App -->
   <script src="/app.js"></script>
 </body>
 
