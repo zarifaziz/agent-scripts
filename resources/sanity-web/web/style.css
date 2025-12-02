@@ -530,6 +530,79 @@ tbody tr:hover td {
 
 /* Template styles are loaded from /templates/*.css */
 
+/* === Loading Orb === */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  gap: 24px;
+}
+
+.loading-orb {
+  width: 48px;
+  height: 48px;
+  position: relative;
+}
+
+.loading-orb .ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(77, 166, 255, 0.2);
+  border-top-color: #4da6ff;
+  border-right-color: #4da6ff;
+  animation: orb-spin 1s linear infinite;
+}
+
+.loading-orb .ring-inner {
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  border: 2px solid rgba(179, 136, 255, 0.2);
+  border-bottom-color: #b388ff;
+  border-left-color: #b388ff;
+  animation: orb-spin 1.5s linear infinite reverse;
+}
+
+.loading-orb .orb-core {
+  position: absolute;
+  inset: 16px;
+  border-radius: 50%;
+  background: #4da6ff;
+  opacity: 0.3;
+  animation: orb-pulse 2s ease-in-out infinite;
+}
+
+@keyframes orb-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes orb-pulse {
+  0%, 100% { opacity: 0.2; transform: scale(0.8); }
+  50% { opacity: 0.5; transform: scale(1.1); }
+}
+
+.loading-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-3);
+  letter-spacing: 0.1em;
+}
+
+.loading-text span {
+  animation: loading-dots 1.5s infinite;
+}
+
+.loading-text span:nth-child(2) { animation-delay: 0.2s; }
+.loading-text span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes loading-dots {
+  0%, 60%, 100% { opacity: 0.2; }
+  30% { opacity: 1; }
+}
+
 /* === KATEX === */
 .katex { font-size: 1.05em; }
 .katex-display { margin: 0.5em 0; }

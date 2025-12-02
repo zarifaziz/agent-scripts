@@ -80,20 +80,41 @@ func main() {
 		return
 	}
 
-	var buf bytes.Buffer
-	if err := p.ProcessStream(bufio.NewReader(in), &buf); err != nil {
+	// Stream rendering: render each record as it arrives
+	useColor := shouldColor(opt)
+	renderer := &streamRenderer{color: useColor}
+	if err := p.ProcessStream(bufio.NewReader(in), renderer); err != nil {
 		log.Fatalf("process: %v", err)
 	}
+}
 
-	useColor := shouldColor(opt)
-	dec := json.NewDecoder(bytes.NewReader(buf.Bytes()))
-	for dec.More() {
-		var m map[string]any
-		if err := dec.Decode(&m); err != nil {
-			log.Fatalf("decode: %v", err)
+// streamRenderer implements io.Writer and renders each NDJSON record as it arrives
+type streamRenderer struct {
+	color bool
+	buf   bytes.Buffer
+}
+
+func (r *streamRenderer) Write(p []byte) (int, error) {
+	n := len(p)
+	r.buf.Write(p)
+
+	// Process complete lines (NDJSON = one JSON object per line)
+	for {
+		line, err := r.buf.ReadBytes('\n')
+		if err != nil {
+			// No complete line yet, put bytes back
+			r.buf.Write(line)
+			break
 		}
-		renderRecord(m, useColor)
+		// Parse and render the record
+		var m map[string]any
+		if err := json.Unmarshal(line, &m); err != nil {
+			// Not valid JSON, skip
+			continue
+		}
+		renderRecord(m, r.color)
 	}
+	return n, nil
 }
 
 func renderRecord(m map[string]any, color bool) {

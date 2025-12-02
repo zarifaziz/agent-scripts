@@ -5,6 +5,35 @@ const renderedIndices = new Set();
 const openLogIndices = []; // Track indices of open logs for rolling window
 const isPinView = location.pathname.startsWith('/p/');
 const pinId = isPinView ? location.pathname.split('/p/')[1]?.split('/')[0] : '';
+let isLiveMode = false; // Only do rolling window in live mode
+
+// Config: Auto-expand last N cards (0 = disabled)
+const ROLLING_OPEN_COUNT = 0;
+
+// Loading state
+function showLoading() {
+  if (document.getElementById('loading-orb')) return;
+  const loader = document.createElement('div');
+  loader.id = 'loading-orb';
+  loader.className = 'loading-container';
+  loader.innerHTML = `
+    <div class="loading-orb">
+      <div class="ring"></div>
+      <div class="ring-inner"></div>
+      <div class="orb-core"></div>
+    </div>
+    <div class="loading-text">AWAITING<span>.</span><span>.</span><span>.</span></div>
+  `;
+  app.appendChild(loader);
+}
+
+function hideLoading() {
+  const loader = document.getElementById('loading-orb');
+  if (loader) loader.remove();
+}
+
+// Show loading on start
+showLoading();
 
 // Persistence Helpers
 function getToggleState(key, defaultState) {
@@ -83,11 +112,25 @@ async function loadHistoryAndConnect() {
       } catch { }
     });
     // Render all historical logs
-    records.forEach(renderIncremental);
+    if (records.length > 0) {
+      records.forEach(renderIncremental);
+      
+      // Expand last N logs from history
+      if (ROLLING_OPEN_COUNT > 0) {
+        const allCards = document.querySelectorAll('details.card');
+        const lastN = Array.from(allCards).slice(-ROLLING_OPEN_COUNT);
+        lastN.forEach(card => {
+          card.open = true;
+          const key = card.id?.replace('log-', '');
+          if (key) openLogIndices.push(key);
+        });
+      }
+    }
   } catch (e) {
     console.warn('Failed to load history:', e);
   }
-  // Then connect WebSocket for live updates
+  // Enable live mode for rolling window, then connect WebSocket
+  isLiveMode = true;
   connect();
 }
 
@@ -98,6 +141,9 @@ if (isPinView) {
 }
 
 function renderIncremental(r) {
+  // Hide loading on first render
+  hideLoading();
+  
   const key = r.index ?? r._idx ?? Math.random();
 
   // If it's a block or text, we might need to find the parent log if we want to append to it
@@ -116,15 +162,11 @@ function renderIncremental(r) {
     const card = createLogCard(log);
     app.appendChild(card);
 
-    // Rolling Open Logic
-    // Open the new card
-    const details = card.querySelector('details.card'); // createCardBase returns details directly now? No, createCardBase returns details.card
-    if (details) {
-      details.open = true;
+    // Rolling Open Logic - keep last N cards expanded
+    if (card && card.tagName === 'DETAILS' && isLiveMode && ROLLING_OPEN_COUNT > 0) {
+      card.open = true;
       openLogIndices.push(key);
-
-      // Keep only last 3 open
-      if (openLogIndices.length > 3) {
+      while (openLogIndices.length > ROLLING_OPEN_COUNT) {
         const toCloseIdx = openLogIndices.shift();
         const toCloseCard = document.getElementById(`log-${toCloseIdx}`);
         if (toCloseCard) toCloseCard.open = false;
@@ -403,17 +445,6 @@ function createCollapsibleSection(title, content, persistenceKey, defaultOpen) {
   const pre = document.createElement('pre');
   // Code blocks are plain text - no KaTeX rendering here
   pre.textContent = textContent;
-
-  // Long Press to Toggle
-  let pressTimer;
-  wrapper.onmousedown = (e) => {
-    if (e.target === copyBtn || e.target === previewToggle || e.target.tagName === 'INPUT') return;
-    pressTimer = setTimeout(() => {
-      details.open = !details.open;
-    }, 500); // 500ms long press
-  };
-  wrapper.onmouseup = () => clearTimeout(pressTimer);
-  wrapper.onmouseleave = () => clearTimeout(pressTimer);
 
   wrapper.appendChild(pre);
   details.appendChild(wrapper);

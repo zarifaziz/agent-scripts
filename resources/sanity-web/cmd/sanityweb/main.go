@@ -144,6 +144,7 @@ func main() {
 	minLines := flag.Int("min-lines", 4, "min lines before block extraction")
 	cfgPath := flag.String("config", "", "config file override")
 	addr := flag.String("addr", ":5151", "listen address")
+	noTee := flag.Bool("no-tee", false, "disable tee to sane CLI")
 	flag.Parse()
 
 	// ensure older instances don't hold the port
@@ -160,11 +161,62 @@ func main() {
 	h := newHub()
 	go h.run()
 
+	// Determine if we should tee to sane (when reading from pipe, not file)
+	shouldTee := *file == "" && !*noTee
+
 	go func() {
+		var reader io.Reader = in
+		var teeWriters []io.Writer
+
+		// Always tee raw input to log file
+		logFile, logPath := openRawLogFile()
+		if logFile != nil {
+			teeWriters = append(teeWriters, logFile)
+			defer logFile.Close()
+			log.Printf("raw log: %s", logPath)
+		}
+
+		// If piped input, also tee to sane for CLI output
+		var saneCmd *exec.Cmd
+		var sanePipe io.WriteCloser
+		if shouldTee {
+			saneCmd = exec.Command("sane")
+			saneCmd.Stdout = os.Stdout
+			saneCmd.Stderr = os.Stderr
+
+			var err error
+			sanePipe, err = saneCmd.StdinPipe()
+			if err != nil {
+				log.Printf("sane pipe: %v", err)
+			} else {
+				if err := saneCmd.Start(); err != nil {
+					log.Printf("sane start: %v", err)
+					sanePipe = nil
+				} else {
+					teeWriters = append(teeWriters, sanePipe)
+					log.Printf("tee enabled: piping to sane CLI")
+				}
+			}
+		}
+
+		// Set up tee if we have any writers
+		if len(teeWriters) > 0 {
+			reader = io.TeeReader(in, io.MultiWriter(teeWriters...))
+		}
+
 		p := core.NewProcessor(*cfg, core.Options{IncludeFXLogs: *fx, MinMultilineLines: *minLines})
-		if err := p.ProcessStream(bufio.NewReader(in), broadcastWriter{hub: h}); err != nil {
+		if err := p.ProcessStream(bufio.NewReader(reader), broadcastWriter{hub: h}); err != nil {
 			log.Printf("process: %v", err)
 		}
+
+		// Close sane stdin pipe and wait for it to finish after processing completes
+		if sanePipe != nil {
+			sanePipe.Close()
+		}
+		if saneCmd != nil && saneCmd.Process != nil {
+			saneCmd.Wait()
+		}
+
 		h.mu.Lock()
 		log.Printf("stream complete, history records: %d", len(h.history))
 		h.mu.Unlock()
@@ -345,4 +397,25 @@ func deletePin(id string) error {
 		path = filepath.Join(dir, id)
 	}
 	return os.Remove(path)
+}
+
+func openRawLogFile() (*os.File, string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("raw log: home dir: %v", err)
+		return nil, ""
+	}
+	dir := filepath.Join(home, ".cache", "scripts", "sanity-web")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("raw log: mkdir: %v", err)
+		return nil, ""
+	}
+	filename := time.Now().Format("2006-01-02_15-04-05") + ".log"
+	path := filepath.Join(dir, filename)
+	f, err := os.Create(path)
+	if err != nil {
+		log.Printf("raw log: create: %v", err)
+		return nil, ""
+	}
+	return f, path
 }
