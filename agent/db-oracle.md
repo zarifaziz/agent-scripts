@@ -1,6 +1,6 @@
 ---
 description: Generate tested and production quality cypher queries via researching codebase and iterating on the actual db.
-model: anthropic/claude-opus-4-1
+model: anthropic/claude-opus-4-5
 permissions:
   - read-all
 ---

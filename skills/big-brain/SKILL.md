@@ -5,7 +5,7 @@ allowed-tools:
   - bash
 metadata:
   version: "1.0"
-  model: "anthropic/claude-opus-4-1-20250805"
+  model: "anthropic/claude-opus-4-5"
 ---
 
 # Big Brain
@@ -30,9 +30,23 @@ big-brain "How should we implement caching?"
 
 # Piped input
 echo "What's the best approach for rate limiting?" | big-brain
+
+# Continue a session (for follow-ups or timeout recovery)
+big-brain -s ses_abc123 <<'EOF'
+continue with implementation details
+EOF
 ```
 
 Prompts can come via **stdin** (heredoc, pipe, redirect) or command-line arguments. The tool uses your current working directory as context and will research the codebase thoroughly.
+
+## Session Continuation
+
+The tool displays the session ID at start and completion. Use `-s SESSION_ID` to:
+- Continue a conversation with follow-up questions
+- Recover from timeouts (session ID shown before timeout)
+- Build on previous analysis
+
+**Oracle Mode**: Big-brain operates as a read-only advisory oracle - it analyzes and advises but does not make changes itself.
 
 ## When to Use
 

@@ -8,6 +8,7 @@ I'm a blind developer so please use `piper-say`utility via piper-tts skill to in
 - **NEVER write markdown files (README, SUMMARY, etc.) unless explicitly requested** - All task summaries and completion reports should be communicated directly to the user in conversation (TLDR format always)
 - Keep all communication concise and actionable - the user prefers direct verbal updates over written documentation
 - The user is already blind, so don't punish him more with your summary/task md files unless asked explicilty, also don't use emojis or other visual aids (i'm sure u can guess why)
+- Only and only when explicitly requested, mkdir -p .plans/ folder and put all your md files there, never ever pollute main dir .
 
 ## Agent Protocol
 
@@ -26,6 +27,7 @@ I'm a blind developer so please use `piper-say`utility via piper-tts skill to in
 - Unsure? Read more code first; if still blocked, ask with a short options summary.
 - Flag conflicting instructions and propose the safer path.
 - Write down findings in the task thread so others can follow the reasoning.
+- When tasked with a bug or debugging something, and the information isn't enough to deduce just add logs and re-run yourself or prompt for re-run if you can't run yourself. Don't assume and do the fix, verify it first
 
 # Skills
 
@@ -46,4 +48,5 @@ local-librarian: Search and analyze local repositories with a specialized agent 
 piper-tts: Use piper-say TTS tool to provide audio feedback when completing code implementation tasks. Primarily uses English (piper-say) unless user explicitly requests Nepali (piper-sayn).
 psql-safe: Execute SQL queries against PostgreSQL/CockroachDB databases. Use when running read queries, testing write operations, or working with CockroachDB databases.
 reverse-graphql-input: Reverse engineer GraphQL input from a lesson plan or worksheet plan ID/link. Extracts plan data and reconstructs the original input JSON used to create it.
+session-hunter: Hunt down Amp sessions by code changes, file paths, or function names.
 ```
