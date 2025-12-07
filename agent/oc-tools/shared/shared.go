@@ -107,6 +107,9 @@ func (c *Client) startServer() (string, error) {
 		return "", fmt.Errorf("failed to get stdout pipe: %w", err)
 	}
 
+	// Discard stderr to prevent blocking (opencode logs go to stderr with --print-logs)
+	cmd.Stderr = nil // goes to os.DevNull
+
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("failed to start opencode serve: %w", err)
 	}
@@ -119,14 +122,21 @@ func (c *Client) startServer() (string, error) {
 
 	go func() {
 		scanner := bufio.NewScanner(stdout)
+		urlSent := false
 		for scanner.Scan() {
 			line := scanner.Text()
-			if matches := urlRe.FindStringSubmatch(line); len(matches) > 1 {
-				ready <- matches[1]
-				return
+			if !urlSent {
+				if matches := urlRe.FindStringSubmatch(line); len(matches) > 1 {
+					ready <- matches[1]
+					urlSent = true
+					// Continue draining stdout to prevent pipe buffer from filling
+				}
 			}
+			// Keep consuming stdout until EOF to prevent process blocking
 		}
-		close(ready)
+		if !urlSent {
+			close(ready)
+		}
 	}()
 
 	// Wait up to 30 seconds for server ready
@@ -204,8 +214,9 @@ func (c *Client) FindBestFreeModel() (*FreeModel, error) {
 				continue
 			}
 
-			// Check if supports tool calls (needed for websearch)
-			if !model.ToolCall {
+			// Skip only if tool_call is explicitly false
+			// null or true means tool calls are supported
+			if model.ToolCall == false && model.JSON.ToolCall.IsNull() == false {
 				continue
 			}
 
