@@ -1,15 +1,24 @@
+---
+name: browser-tools
+description: Minimal CDP tools for collaborative site exploration.
+allowed-tools:
+  - bash
+metadata:
+  version: "1.0"
+---
+
 # Browser Tools
 
 Minimal CDP tools for collaborative site exploration.
 
-## Start Chrome
+## Start Thorium
 
 ```bash
 node start.js              # Fresh profile
-node start.js --profile    # Copy your profile (cookies, logins)
+node start.js --profile    # Use your Thorium Profile 1 (cookies, logins)
 ```
 
-Start Chrome on `:9222` with remote debugging.
+Start Thorium on `:9222` with remote debugging (uses Profile 1 from chrome-flutter-extension.sh).
 
 ## Navigate
 
@@ -32,10 +41,13 @@ Execute JavaScript in active tab (async context).
 ## Screenshot
 
 ```bash
-node screenshot.js
+node screenshot.js                    # Default: 50% scale, quality 50, webp
+node screenshot.js --scale=1          # Full resolution
+node screenshot.js --quality=80       # Higher quality (1-100)
+node screenshot.js --full             # Full page scroll capture
 ```
 
-Screenshot current viewport, returns temp file path.
+Screenshot current viewport, returns temp file path. Optimized for LLM token efficiency.
 
 ## Pick Elements
 

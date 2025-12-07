@@ -153,107 +153,110 @@ MATCH (lp:LessonPlan {id: id})
 
 #### 4B. For Worksheet Plans
 
-Run the following query using cypher-safe to reconstruct the worksheet plan input:
+Run the following query using cypher-safe to reconstruct the worksheet plan input.
+This query properly extracts nodeCounts in the correct input format:
+- Only `SCAFFOLDED_QUESTION` uses `nodeType`
+- All others collapse to `questionType`: MULTI, SHORT, OPEN_ENDED
+
+(based on `getWorksheetState` in `internal/lesson_plan/update_worksheet_plan_v2.go`):
 
 ```cypher
-MATCH (lp:LessonPlan {id: "<lesson-plan-id>"})
-
-// Get the Subtopic
+MATCH (lp:WorksheetPlan {id: "<worksheet-plan-id>"})
 OPTIONAL MATCH (lp)-[:FOR]->(st:Subtopic)
-
-// Get the WorksheetPlanConfiguration
 OPTIONAL MATCH (lp)<-[:FOR]-(wc:WorksheetPlanConfiguration)
-
-// Get all Skills associated with the lesson plan
-OPTIONAL MATCH (lp)-[:PLANS]->(:Lesson)-[:CONTAINS]->(ss:SkillSection)-[:HAS]->(skill:Skill)
-
-// Get all enabled node types
-OPTIONAL MATCH (lp)-[:PLANS]->(:Lesson)-[:CONTAINS]->(:LessonSection)-[:INCLUDES]->(lpn:LessonPlanNode {enabled: true})
-
-// Count scaffolded question nodes
-OPTIONAL MATCH (lp)-[:PLANS]->(:Lesson)-[:CONTAINS]->(:LessonSection)-[:INCLUDES]->(scaffolded:LessonPlanScaffoldedQuestion {enabled: true})
-
-// Get questions with their types from the INCLUDES edge
-OPTIONAL MATCH (lp)-[:PLANS]->(:Lesson)-[:CONTAINS]->(:LessonSection)-[:INCLUDES]->(sqn:StudentQuestionsNode {enabled: true})-[incEdge:INCLUDES]->(q:Question|UserQuestion)
-
-// Get the creator User
 OPTIONAL MATCH (u:User)-[:CREATED]->(lp)
 
-WITH
-    lp,
-    st,
-    wc,
-    collect(DISTINCT skill.id) AS skillIDs,
-    collect(DISTINCT lpn.type) AS enabledNodeTypes,
-    count(DISTINCT scaffolded) AS scaffoldedCount,
-    collect(DISTINCT {
-        question: q,
-        edgeType: incEdge.type,
-        difficulty: incEdge.difficulty
-    }) AS questionEdges,
-    u
+// Get skillIDs from SkillSections
+CALL {
+    WITH lp
+    OPTIONAL MATCH (lp)-[:PLANS]->(:Lesson)-[:CONTAINS]->(ss:SkillSection)-[:HAS]->(skill:Skill)
+    WHERE ss.enabled = true OR ss.enabled IS NULL
+    RETURN collect(DISTINCT skill.id) AS skillIDs
+}
 
-// Count questions by type from edge properties
-WITH
-    lp,
-    st,
-    wc,
-    skillIDs,
-    enabledNodeTypes,
-    scaffoldedCount,
-    u,
-    size([qe IN questionEdges WHERE qe.edgeType = "MULTIPLE_CHOICE"]) AS multiCount,
-    size([qe IN questionEdges WHERE qe.edgeType = "SHORT_ANSWER"]) AS shortCount,
-    size([qe IN questionEdges WHERE qe.edgeType = "OPEN_ENDED"]) AS openEndedCount
+// Get nodeCounts in input format (SCAFFOLDED uses nodeType, others use questionType)
+// Also calculate total questionCount from actual nodes
+CALL {
+    WITH lp
+    OPTIONAL MATCH (lp)-[:PLANS]->(l:Lesson)-[:CONTAINS]->(ls:LessonSection)-[includesRel:INCLUDES]->(lpn:LessonPlanNode)
+    WHERE (lpn.enabled = true OR lpn.enabled IS NULL) AND (ls.enabled = true OR ls.enabled IS NULL)
+    
+    OPTIONAL MATCH (lpn:StudentQuestionsNode)-[qi:INCLUDES]->(q:Question)
+    
+    // Map LPN types to question types
+    WITH lpn, CASE
+        WHEN lpn.type = "SCAFFOLDED_QUESTION" THEN "SCAFFOLDED"
+        WHEN lpn.type = "STUDENT_QUESTIONS" THEN qi.type
+        WHEN lpn.type = "MULTIPLE_CHOICE_QUESTION" THEN "MULTIPLE_CHOICE"
+        WHEN lpn.type = "SHORT_ANSWER_QUESTION" THEN "SHORT_ANSWER"
+        WHEN lpn.type = "CONTEMPLATIVE_QUESTION" THEN "OPEN_ENDED"
+        ELSE null
+    END AS qType,
+    lpn.type AS nodeType
+    WHERE lpn IS NOT NULL AND qType IS NOT NULL
+    
+    WITH nodeType, qType, count(*) AS cnt
+    
+    // Format: SCAFFOLDED gets nodeType, others get questionType (MULTI, SHORT, OPEN_ENDED)
+    WITH CASE
+        WHEN nodeType = "SCAFFOLDED_QUESTION" THEN {nodeType: "SCAFFOLDED_QUESTION", count: cnt}
+        WHEN qType = "MULTIPLE_CHOICE" THEN {questionType: "MULTI", count: cnt}
+        WHEN qType = "SHORT_ANSWER" THEN {questionType: "SHORT", count: cnt}
+        WHEN qType = "OPEN_ENDED" THEN {questionType: "OPEN_ENDED", count: cnt}
+        ELSE null
+    END AS nodeCount
+    WHERE nodeCount IS NOT NULL
+    
+    // Aggregate same types together
+    WITH nodeCount.nodeType AS nt, nodeCount.questionType AS qt, sum(nodeCount.count) AS total
+    WITH collect(
+        CASE 
+            WHEN nt IS NOT NULL THEN {nodeType: nt, count: total}
+            ELSE {questionType: qt, count: total}
+        END
+    ) AS nodeCounts
+    
+    // Sum all counts for questionCount
+    WITH nodeCounts, reduce(sum = 0, nc IN nodeCounts | sum + nc.count) AS questionCount
+    RETURN nodeCounts, questionCount
+}
 
-// Build node counts array
-WITH
-    lp,
-    st,
-    wc,
-    skillIDs,
-    enabledNodeTypes,
-    u,
-    CASE WHEN scaffoldedCount > 0 THEN [{nodeType: "SCAFFOLDED_QUESTION", count: scaffoldedCount}] ELSE [] END +
-    CASE WHEN multiCount > 0 THEN [{questionType: "MULTI", count: multiCount}] ELSE [] END +
-    CASE WHEN shortCount > 0 THEN [{questionType: "SHORT", count: shortCount}] ELSE [] END +
-    CASE WHEN openEndedCount > 0 THEN [{questionType: "OPEN_ENDED", count: openEndedCount}] ELSE [] END
-    AS nodeCounts
+// Get enabled node types
+CALL {
+    WITH lp
+    OPTIONAL MATCH (lp)-[:PLANS]->(:Lesson)-[:CONTAINS]->(:LessonSection)-[:INCLUDES]->(lpn:LessonPlanNode)
+    WHERE lpn.enabled = true OR lpn.enabled IS NULL
+    RETURN collect(DISTINCT lpn.type) AS includeNodes
+}
 
-// Construct the creation params object
 RETURN {
     input: {
         name: lp.name,
         subtopicID: st.id,
         context: coalesce(lp.context, ""),
         skillIDs: skillIDs,
-        configuration: CASE
-            WHEN wc IS NOT NULL THEN {
-                type: "STANDARD",
-                questionCount: coalesce(wc.questionCount, 0),
-                averageQuestionDifficulty: coalesce(wc.averageQuestionDifficulty, -1),
-                workingOutSpaceEnabled: coalesce(wc.workingOutSpaceEnabled, true),
-                reducePaperEnabled: coalesce(wc.reducePaperEnabled, true),
-                nodeCounts: nodeCounts,
-                maxDifficulty: coalesce(wc.maxDifficulty, 4),
-                minDifficulty: coalesce(wc.minDifficulty, 0)
-            }
-            ELSE {
-                type: "STANDARD",
-                questionCount: 0,
-                averageQuestionDifficulty: -1,
-                workingOutSpaceEnabled: true,
-                reducePaperEnabled: true,
-                nodeCounts: nodeCounts,
-                maxDifficulty: 4,
-                minDifficulty: 0
-            }
-        END,
-        includeNodes: [nodeType IN enabledNodeTypes WHERE nodeType IS NOT NULL]
+        includeNodes: [n IN includeNodes WHERE n IS NOT NULL AND n <> ""],
+        configuration: {
+            type: coalesce(wc.type, "STANDARD"),
+            questionCount: questionCount,
+            averageQuestionDifficulty: coalesce(wc.averageQuestionDifficulty, -1),
+            minDifficulty: coalesce(wc.minDifficulty, 0),
+            maxDifficulty: coalesce(wc.maxDifficulty, 4),
+            workingOutSpaceEnabled: coalesce(wc.workingOutSpaceEnabled, true),
+            reducePaperEnabled: coalesce(wc.reducePaperEnabled, true),
+            nodeCounts: nodeCounts
+        }
     },
     classId: u.id
 } AS creationParams
 ```
+
+**nodeCounts format** (input format, not internal):
+- `SCAFFOLDED_QUESTION` → `{nodeType: "SCAFFOLDED_QUESTION", count: X}`
+- `MULTIPLE_CHOICE_QUESTION` / `STUDENT_QUESTIONS(MULTIPLE_CHOICE)` → `{questionType: "MULTI", count: X}`
+- `SHORT_ANSWER_QUESTION` / `STUDENT_QUESTIONS(SHORT_ANSWER)` → `{questionType: "SHORT", count: X}`
+- `CONTEMPLATIVE_QUESTION` / `STUDENT_QUESTIONS(OPEN_ENDED)` → `{questionType: "OPEN_ENDED", count: X}`
+- `LEARNING_GOALS` → not included in nodeCounts
 
 ### Step 5: Format Output
 

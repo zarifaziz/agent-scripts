@@ -9,42 +9,55 @@ const useProfile = process.argv[2] === "--profile";
 if (process.argv[2] && process.argv[2] !== "--profile") {
     console.log("Usage: start.js [--profile]");
     console.log("\nOptions:");
-    console.log("  --profile  Copy your default Chrome profile (cookies, logins)");
+    console.log("  --profile  Copy your default Thorium profile (cookies, logins)");
     console.log("\nExamples:");
     console.log("  start.js            # Start with fresh profile");
-    console.log("  start.js --profile  # Start with your Chrome profile");
+    console.log("  start.js --profile  # Start with your Thorium profile");
     process.exit(1);
 }
 
-// Kill existing Chrome
+// Kill existing Thorium
 try {
-    execSync("killall 'Google Chrome'", { stdio: "ignore" });
+    execSync("pkill -f 'Thorium'", { stdio: "ignore" });
 } catch {}
 
 // Wait a bit for processes to fully die
 await new Promise((r) => setTimeout(r, 1000));
 
-// Setup profile directory
+// Config matching chrome-flutter-extension.sh
 const homeDir = process.env["HOME"];
+const thoriumProfilePath = path.join(homeDir, "Library", "Application Support", "Thorium", "Profile 1");
+const thoriumUserDataDir = path.join(homeDir, "Library", "Application Support", "Thorium");
 const cacheDir = path.join(homeDir, ".cache", "scraping");
+
+// Setup cache directory for fresh profile mode
 if (!fs.existsSync(cacheDir)) {
     fs.mkdirSync(cacheDir, { recursive: true });
 }
 
+let userDataDir = cacheDir;
+let profileDir = "";
+
 if (useProfile) {
-    // Sync profile with rsync (much faster on subsequent runs)
-    // Note: Ensure the source path matches your system's Chrome profile path
-    const sourceProfile = path.join(homeDir, "Library", "Application Support", "Google", "Chrome");
-    execSync(
-        `rsync -a --delete "${sourceProfile}/" "${cacheDir}/"`,
-        { stdio: "pipe" },
-    );
+    // Use existing Thorium profile directly (same as chrome-flutter-extension.sh)
+    userDataDir = thoriumUserDataDir;
+    profileDir = "Profile 1";
 }
 
-// Start Chrome in background (detached so Node can exit)
+// Build args
+const chromeArgs = [
+    "--remote-debugging-port=9222",
+    `--user-data-dir=${userDataDir}`,
+];
+
+if (profileDir) {
+    chromeArgs.push(`--profile-directory=${profileDir}`);
+}
+
+// Start Thorium in background (detached so Node can exit)
 spawn(
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    ["--remote-debugging-port=9222", `--user-data-dir=${cacheDir}`],
+    "/Applications/Thorium.app/Contents/MacOS/Thorium",
+    chromeArgs,
     { detached: true, stdio: "ignore" },
 ).unref();
 
@@ -65,8 +78,8 @@ for (let i = 0; i < 30; i++) {
 }
 
 if (!connected) {
-    console.error("✗ Failed to connect to Chrome");
+    console.error("x Failed to connect to Thorium");
     process.exit(1);
 }
 
-console.log(`✓ Chrome started on :9222 ${useProfile ? " with your profile" : ""} `);
+console.log(`ok Thorium started on :9222${useProfile ? " with your profile" : ""}`);
