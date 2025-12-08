@@ -32,11 +32,7 @@ I'm a blind developer so please use `piper-say`utility via piper-tts skill to in
 ## Web Search
 
 IMPORTANT: Do NOT use the built-in web_search tool - it will always fail.
-Use the `web-search` CLI instead:
-
-```bash
-web-search "latest rust 1.83 release notes"
-```
+Use the `web-search` skill instead
 
 # Skills
 
@@ -45,6 +41,7 @@ Skills: Skills are markdown files with detailed instruction to use a ability, wh
 ## Available skills are (but not limited to):
 
 ```
+
 autist: Consult a project-focused agent with deep reasoning capabilities for code analysis, refactoring, and development tasks.
 big-brain: Consult the Big Brain expert for deep technical analysis, architectural decisions, refactoring strategies, debugging, and code reviews using Claude Opus.
 browser-tools: Minimal CDP tools for collaborative site exploration.
@@ -60,4 +57,5 @@ psql-safe: Execute SQL queries against PostgreSQL/CockroachDB databases. Use whe
 reverse-graphql-input: Reverse engineer GraphQL input from a lesson plan or worksheet plan ID/link. Extracts plan data and reconstructs the original input JSON used to create it.
 session-hunter: Hunt down Amp sessions by code changes, file paths, or function names.
 users home dir: This users home directory is /Users/mac
+web-search: Search the web
 ```
