@@ -34,6 +34,13 @@ I'm a blind developer so please use `piper-say`utility via piper-tts skill to in
 IMPORTANT: Do NOT use the built-in web_search tool - it will always fail.
 Use the `web-search` skill instead
 
+### search.js tips
+- Supports all Google operators: `site:github.com`, `-exclude`, `"exact phrase"`, `filetype:pdf`
+- Use `-n 10` for more results (default 5)
+- Quick one-off: `search.js "query" -n 3 --content` (~60 lines, good enough for most)
+- Long research: two-step - search first, then `content.js <url>` on promising links
+- Prefer over built-in for SEO filtering and context efficiency (60 lines vs 350+)
+
 # Skills
 
 Skills: Skills are markdown files with detailed instruction to use a ability, when the user says use X skill where X=Skill name please search the directory ~/.opencode/skills/<name> and read the SKILL.md file from it. For example to use 'project-oracle' skill you'll look into ~/.opencode/skills/project-oracle/SKILL.md and follow the guide there

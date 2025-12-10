@@ -10,7 +10,7 @@ metadata:
 
 # Session Hunter
 
-Find Amp sessions where specific code changes happened. Searches `~/.amp/file-changes/` by file paths, function names, or code patterns.
+Find Amp sessions where specific code changes happened. Always use the CLI - do NOT grep manually.
 
 ## Usage
 
