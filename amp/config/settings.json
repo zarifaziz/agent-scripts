@@ -1,0 +1,27 @@
+{
+  "amp.url": "http://localhost:8317",
+  "amp.tools.stopTimeout": 1000,
+  "amp.experimental.planMode": true,
+  "amp.permissions": [
+    {
+      "tool": "Bash",
+      "action": "delegate",
+      "to": "amp-permission-helper"
+    },
+    {
+      "tool": "edit_file",
+      "action": "delegate",
+      "to": "amp-permission-helper"
+    },
+    {
+      "tool": "create_file",
+      "action": "delegate",
+      "to": "amp-permission-helper"
+    },
+    {
+      "tool": "*",
+      "action": "allow"
+    }
+  ],
+  "amp.dangerouslyAllowAll": true
+}

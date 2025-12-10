@@ -1,0 +1,153 @@
+# Command patterns that always prompt for confirmation
+# Use regex patterns
+
+# brew package management
+^brew (install|uninstall|remove|upgrade)
+
+# git destructive operations
+^git checkout .
+^git checkout -f
+^git checkout --force
+^git reset
+^git clean
+^git stash drop
+^git stash clear
+^git branch -[dD]
+^git push.*--force
+^git push.*-f
+
+# remote + execute chains (bypass attempts)
+(scp|sftp|curl|wget).*&&
+(scp|sftp|curl|wget).*;
+git clone.*&&
+git clone.*;
+
+# xargs with commands
+xargs.*(bash|sh|zsh|python|node)
+
+# lang runtimes - destructive file ops
+fs\.rmSync|fs\.rmdirSync|fs\.unlinkSync
+FileUtils\.rm_rf|FileUtils\.remove
+awk.*system\(
+eval\(.*rm
+exec\(.*rm
+
+# build tools with dangerous flags
+(gradle|mvn).*--project-dir=.*/
+pip.*--target=.*/
+make.*DESTDIR=.*/
+npm.*--prefix=.*/
+go run.*--path=.*/
+
+# database destructive
+DROP DATABASE
+DROP TABLE
+DROP SCHEMA
+TRUNCATE
+FLUSHALL
+FLUSHDB
+dropDatabase
+DETACH DELETE
+DELETE FROM.*WHERE 1
+DELETE FROM [^W]*$
+
+# cloud/infra destructive
+aws s3 rm.*--recursive
+aws s3 rb
+terraform destroy
+terraform apply.*-auto-approve
+pulumi destroy
+gcloud.*delete
+az.*delete
+kubectl delete (ns|namespace|pv|pvc|all)
+kubectl delete.*--all
+helm uninstall
+ansible.*dest=.*/
+
+# misc dangerous
+^yes.*\|
+while.*read.*rm
+for.*rm -rf
+
+# GCS
+gsutil.*rm.*-r
+gsutil.*-m.*rm
+
+# Docker destructive
+docker rm.*-f.*\$\(
+docker system prune
+docker volume rm.*\$\(
+docker rmi.*\$\(
+docker container prune
+docker image prune
+docker network prune
+
+# Neo4j admin
+neo4j-admin.*drop
+neo4j-admin.*unbind
+neo4j-admin.*restore
+
+# GitHub CLI
+gh repo delete
+gh release delete
+gh pr close.*--delete-branch
+
+# Process management
+tmux kill-server
+tmux kill-session
+pkill -9
+pkill.*neo4j
+pkill.*docker
+pkill.*postgres
+killall
+
+# Oso Cloud
+oso-cloud delete
+oso delete-all-facts
+
+# Redis destructive (beyond FLUSHALL which is in reject)
+redis-cli.*DEL.*\$\(
+redis-cli.*KEYS.*\|.*xargs
+redis-cli.*--scan.*DEL
+
+# Qdrant
+qdrant.*delete.*collection
+delete collection.*--all
+
+# Kafka
+kafka-topics.*--delete
+kafka-consumer-groups.*--delete
+kafka-configs.*--delete
+
+# CockroachDB
+cockroach.*DROP
+cockroach.*DELETE
+cockroach.*TRUNCATE
+
+# BigQuery
+bq rm
+bq.*--dataset.*delete
+
+# Podman (same as docker)
+podman rm.*-f
+podman system prune
+podman volume rm
+podman container prune
+podman image prune
+
+# Firebase
+firebase.*projects:delete
+firebase.*hosting:disable
+firebase.*functions:delete
+
+# Apollo Rover
+rover graph delete
+rover subgraph delete
+
+# SQLite
+sqlite3.*DROP
+sqlite3.*DELETE
+sqlite3.*TRUNCATE
+
+# Custom scripts
+restore-db

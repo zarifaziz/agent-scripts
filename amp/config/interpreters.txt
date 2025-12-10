@@ -1,0 +1,10 @@
+# Script interpreters to monitor for risky execution
+bash
+sh
+zsh
+python
+python3
+node
+ruby
+perl
+bun

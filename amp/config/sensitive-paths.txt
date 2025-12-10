@@ -1,0 +1,12 @@
+# Sensitive paths - always prompt, deny = hard block
+$HOME/.ssh
+$HOME/.gnupg
+$HOME/.aws
+$HOME/.kube
+$HOME/.config
+$HOME/Library/Keychains
+/etc
+/usr
+/System
+/Applications
+/var
