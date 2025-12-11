@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# amp-live: fuzzy picker for live Amp threads running in tmux
+# Switch to any active Amp session with a beautiful preview
+
+set -euo pipefail
+
+THREADS_DIR="${HOME}/.local/share/amp/threads"
+
+# SQLite DB path (same as amp-thread-picker)
+DB="${HOME}/.cache/amp_threads.db"
+
+# Get thread ID by matching title against the threads database
+get_thread_id_by_title() {
+    local title="$1"
+    local escaped
+    escaped=$(printf "%s" "$title" | sed "s/'/''/g")
+    sqlite3 "$DB" "SELECT id FROM threads WHERE title = '$escaped' ORDER BY created DESC LIMIT 1;" 2>/dev/null || echo ""
+}
+
+# List all live amp panes (only where bun is actually running)
+# Format: session:window.pane\ttitle\tpath\tthread_id
+list_live_panes() {
+    tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_title}|#{pane_current_command}' 2>/dev/null \
+        | grep -E '\|amp - .+\|bun$' \
+        | while IFS='|' read -r pane title cmd; do
+            # Extract title and path from "amp - Title - ~/path"
+            local thread_title thread_path thread_id
+            thread_title=$(echo "$title" | sed -E 's/^amp - (.+) - (~|\/).*/\1/')
+            thread_path=$(echo "$title" | sed -E 's/^amp - .+ - //')
+            # Get thread ID by matching title in DB
+            thread_id=$(get_thread_id_by_title "$thread_title")
+            printf '%s\t%s\t%s\t%s\n' "$pane" "$thread_title" "$thread_path" "$thread_id"
+        done
+}
+
+# Get thread ID from pane title via DB lookup
+get_thread_id() {
+    local pane="$1"
+    local title thread_title
+    title=$(tmux display-message -t "$pane" -p '#{pane_title}' 2>/dev/null || echo "")
+    thread_title=$(echo "$title" | sed -E 's/^amp - (.+) - (~|\/).*/\1/')
+    get_thread_id_by_title "$thread_title"
+}
+
+# Preview pane - same clean style as amp-thread-picker
+preview_pane() {
+    local pane="$1"
+    
+    # Get pane info
+    local title thread_title thread_path
+    title=$(tmux display-message -t "$pane" -p '#{pane_title}' 2>/dev/null || echo "")
+    thread_title=$(echo "$title" | sed -E 's/^amp - (.+) - (~|\/).*/\1/')
+    thread_path=$(echo "$title" | sed -E 's/^amp - .+ - //')
+    
+    # Get thread ID
+    local thread_id
+    thread_id=$(get_thread_id "$pane")
+    
+    local thread_file="$THREADS_DIR/${thread_id}.json"
+    
+    if [[ -n "$thread_id" && -f "$thread_file" ]]; then
+        jq -r --arg pane "$pane" --arg path "$thread_path" '
+            def fmt_date: . / 1000 | strftime("%Y-%m-%d %H:%M");
+            def truncate($n): if length > $n then .[:$n] + "..." else . end;
+            def clean: gsub("\\s+"; " ") | gsub("^\\s+|\\s+$"; "");
+            
+            "╭──────────────────────────────────────────────────────────────╮",
+            "│  \u001b[1;32mLIVE SESSION\u001b[0m",
+            "│  \(.title // "Untitled" | truncate(55))",
+            "├──────────────────────────────────────────────────────────────┤",
+            "│  \u001b[2mPane:\u001b[0m     \u001b[33m\($pane)\u001b[0m",
+            "│  \u001b[2mPath:\u001b[0m     \($path | truncate(50))",
+            "│  \u001b[2mThread:\u001b[0m   \u001b[35m\(.id)\u001b[0m",
+            "│  \u001b[2mCreated:\u001b[0m  \(.created | fmt_date)",
+            "│  \u001b[2mMessages:\u001b[0m \(.messages | length)",
+            "╰──────────────────────────────────────────────────────────────╯",
+            "",
+            (
+              [.messages[] | select(.role == "user" or .role == "assistant")] 
+              | map({
+                  role: .role,
+                  text: ([.content[]? | select(.type == "text") | .text] | join(" ") | clean)
+                })
+              | map(select(.text != ""))
+              | .[-8:]
+              | to_entries
+              | map(
+                  if .value.role == "user" then
+                    "\u001b[33m▶ USER\u001b[0m",
+                    "  \(.value.text | truncate(120))",
+                    ""
+                  else
+                    "\u001b[36m◀ AMP\u001b[0m",
+                    "  \(.value.text | truncate(200))",
+                    ""
+                  end
+                )
+              | flatten
+              | join("\n")
+            )
+        ' "$thread_file" 2>/dev/null
+    else
+        echo "╭──────────────────────────────────────────────────────────────╮"
+        echo "│  LIVE SESSION"
+        echo "│  $thread_title"
+        echo "├──────────────────────────────────────────────────────────────┤"
+        echo "│  Pane: $pane"
+        echo "│  Path: $thread_path"
+        echo "│  Thread: (not found)"
+        echo "╰──────────────────────────────────────────────────────────────╯"
+    fi
+}
+
+# Main picker using fzf
+picker() {
+    local self="$0"
+    
+    list_live_panes | fzf \
+        --ansi \
+        --no-hscroll \
+        --tabstop=4 \
+        --with-nth=2,3 \
+        --delimiter=$'\t' \
+        --prompt='⚡ live amp> ' \
+        --header=$'enter: switch | ctrl-o: new window | ctrl-r: refresh' \
+        --header-first \
+        --bind "ctrl-r:reload:$self --list" \
+        --bind "ctrl-o:become:echo NEWWIN:{4}" \
+        --preview "$self --preview {1}" \
+        --preview-window=right:55%:wrap \
+        --color='header:italic,prompt:cyan,pointer:yellow' \
+        --pointer='▶' \
+        --marker='●'
+}
+
+# Handle subcommands
+case "${1:-}" in
+    --list)
+        list_live_panes
+        exit 0
+        ;;
+    --preview)
+        shift
+        preview_pane "$1"
+        exit 0
+        ;;
+    --help|-h)
+        echo "amp-live: Switch to live Amp sessions in tmux"
+        echo ""
+        echo "Usage: amp-live [options]"
+        echo ""
+        echo "Options:"
+        echo "  --list      List all live amp panes"
+        echo "  --preview   Show preview for a pane"
+        echo "  --help      Show this help"
+        exit 0
+        ;;
+esac
+
+# Default: run picker
+if ! tmux list-sessions &>/dev/null; then
+    echo "No tmux sessions running" >&2
+    exit 1
+fi
+
+selected=$(picker) || exit 0
+
+if [[ -n "$selected" ]]; then
+    if [[ "$selected" == NEWWIN:* ]]; then
+        # ctrl-o: open thread in new tmux window
+        thread_id="${selected#NEWWIN:}"
+        if [[ -n "$thread_id" ]]; then
+            tmux new-window -n "amp:${thread_id:0:8}" "amp threads continue $thread_id"
+        fi
+    else
+        # enter: switch to the pane
+        pane=$(echo "$selected" | cut -f1)
+        if [[ -n "$TMUX" ]]; then
+            session_window="${pane%.*}"
+            tmux switch-client -t "$session_window"
+            tmux select-pane -t "$pane"
+        else
+            tmux attach-session -t "$pane"
+        fi
+    fi
+fi

@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# amp-thread-indexer: Background service to index amp threads for fast search
+# Run by launchd every 5 minutes
+
+set -euo pipefail
+
+THREADS_DIR="${HOME}/.local/share/amp/threads"
+DB="${HOME}/.cache/amp_threads.db"
+LOCK_FILE="${HOME}/.cache/amp_threads.lock"
+MAX_BODY_SIZE=50000
+
+sql_escape() { printf "%s" "$1" | sed "s/'/''/g"; }
+
+init_db() {
+  sqlite3 "$DB" <<'SQL' >/dev/null
+PRAGMA journal_mode=WAL;
+PRAGMA busy_timeout=5000;
+CREATE TABLE IF NOT EXISTS threads(
+  id TEXT PRIMARY KEY,
+  path TEXT UNIQUE,
+  mtime INTEGER,
+  size INTEGER,
+  title TEXT,
+  created INTEGER
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS threads_fts USING fts5(
+  title, body, thread_id UNINDEXED, tokenize='porter'
+);
+SQL
+}
+
+extract_body() {
+  jq -r '
+    (.messages // [])
+    | map(.content // []) | flatten
+    | map(select(.type == "text") | .text)
+    | join("\n")
+  ' "$1" 2>/dev/null | head -c "$MAX_BODY_SIZE"
+}
+
+upsert_thread() {
+  local f="$1"
+  local mtime size id title created body
+  mtime=$(stat -f %m "$f" 2>/dev/null) || return 1
+  size=$(stat -f %z "$f" 2>/dev/null) || return 1
+  id=$(jq -r '.id // ""' "$f" 2>/dev/null) || return 1
+  title=$(jq -r '.title // "Untitled"' "$f" 2>/dev/null) || title="Untitled"
+  created=$(jq -r '.created // 0' "$f" 2>/dev/null) || created=0
+  body=$(extract_body "$f") || body=""
+
+  local path_sql id_sql title_sql body_sql
+  path_sql=$(sql_escape "$f")
+  id_sql=$(sql_escape "$id")
+  title_sql=$(sql_escape "$title")
+  body_sql=$(sql_escape "$body")
+
+  sqlite3 "$DB" <<SQL
+-- Upsert threads table
+INSERT INTO threads(id, path, mtime, size, title, created)
+VALUES('$id_sql', '$path_sql', $mtime, $size, '$title_sql', $created)
+ON CONFLICT(path) DO UPDATE SET
+  id=excluded.id,
+  mtime=excluded.mtime,
+  size=excluded.size,
+  title=excluded.title,
+  created=excluded.created;
+
+-- Update FTS: delete old if exists, insert new
+DELETE FROM threads_fts WHERE thread_id = '$id_sql';
+INSERT INTO threads_fts(title, body, thread_id) VALUES('$title_sql', '$body_sql', '$id_sql');
+SQL
+}
+
+sync_index() {
+  init_db
+  
+  # Use flock to prevent concurrent syncs
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    echo "Another sync is running, skipping"
+    return 0
+  fi
+  
+  local start_time=$(date +%s)
+  local updated=0 deleted=0
+  
+  # Find orphaned entries (files that no longer exist)
+  while IFS= read -r line; do
+    local p id
+    p=$(echo "$line" | cut -d'|' -f1)
+    id=$(echo "$line" | cut -d'|' -f2)
+    if [ -n "$p" ] && [ ! -e "$p" ]; then
+      local p_esc id_esc
+      p_esc=$(sql_escape "$p")
+      id_esc=$(sql_escape "$id")
+      sqlite3 "$DB" "DELETE FROM threads WHERE path='$p_esc'; DELETE FROM threads_fts WHERE thread_id='$id_esc';"
+      ((deleted++)) || true
+    fi
+  done < <(sqlite3 "$DB" "SELECT path, id FROM threads;")
+  
+  # Update changed files
+  while IFS= read -r -d '' f; do
+    local mtime size prev
+    mtime=$(stat -f %m "$f" 2>/dev/null) || continue
+    size=$(stat -f %z "$f" 2>/dev/null) || continue
+    prev=$(sqlite3 "$DB" "SELECT mtime || ' ' || size FROM threads WHERE path='$(sql_escape "$f")';")
+    if [ "$prev" != "$mtime $size" ]; then
+      upsert_thread "$f" && ((updated++)) || true
+    fi
+  done < <(find "$THREADS_DIR" -maxdepth 1 -name '*.json' -type f -print0)
+  
+  # Checkpoint WAL if grown large
+  local wal_size
+  wal_size=$(stat -f %z "${DB}-wal" 2>/dev/null || echo 0)
+  if [ "$wal_size" -gt 10485760 ]; then
+    sqlite3 "$DB" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null
+  fi
+  
+  local elapsed=$(($(date +%s) - start_time))
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - Indexed: updated=$updated deleted=$deleted time=${elapsed}s"
+  
+  flock -u 9
+}
+
+# Force full re-index (rebuild FTS for all)
+force_reindex() {
+  init_db
+  
+  exec 9>"$LOCK_FILE"
+  flock -w 10 9 || { echo "Could not acquire lock"; exit 1; }
+  
+  echo "Force re-indexing all threads..."
+  local count=0
+  
+  # Drop and recreate tables
+  sqlite3 "$DB" "DROP TABLE IF EXISTS threads; DROP TABLE IF EXISTS threads_fts;"
+  init_db
+  
+  while IFS= read -r -d '' f; do
+    upsert_thread "$f" && ((count++)) || true
+    if ((count % 100 == 0)); then
+      echo "  Indexed $count threads..."
+    fi
+  done < <(find "$THREADS_DIR" -maxdepth 1 -name '*.json' -type f -print0)
+  
+  echo "Done. Indexed $count threads."
+  flock -u 9
+}
+
+case "${1:-}" in
+  --force)
+    force_reindex
+    ;;
+  *)
+    sync_index
+    ;;
+esac
