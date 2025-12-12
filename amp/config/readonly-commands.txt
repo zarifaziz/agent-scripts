@@ -36,5 +36,3 @@ echo
 printf
 test
 [
-ln
-ssh

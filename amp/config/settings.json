@@ -23,5 +23,13 @@
       "action": "allow"
     }
   ],
-  "amp.dangerouslyAllowAll": true
+  "amp.mcpServers": {
+    "playwriter": {
+      "command": "bunx",
+      "args": ["tsx", "/Users/mac/Coding/tools/playwriter/playwriter/src/mcp.ts"],
+      "env": {
+        "CHROME_EXECUTABLE": "/Users/mac/.local/bin/my-chrome"
+      }
+    }
+  }
 }
