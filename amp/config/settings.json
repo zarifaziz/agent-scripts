@@ -2,6 +2,10 @@
   "amp.url": "http://localhost:8317",
   "amp.tools.stopTimeout": 1000,
   "amp.experimental.planMode": true,
+  "amp.notifications.enabled": true,
+  "amp.notifications.system.enabled": true,
+  "amp.git.commit.coauthor.enabled": true,
+  "amp.git.commit.ampThread.enabled": true,
   "amp.permissions": [
     {
       "tool": "Bash",
@@ -22,14 +26,5 @@
       "tool": "*",
       "action": "allow"
     }
-  ],
-  "amp.mcpServers": {
-    "playwriter": {
-      "command": "bunx",
-      "args": ["tsx", "/Users/mac/Coding/tools/playwriter/playwriter/src/mcp.ts"],
-      "env": {
-        "CHROME_EXECUTABLE": "/Users/mac/.local/bin/my-chrome"
-      }
-    }
-  }
+  ]
 }

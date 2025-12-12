@@ -4,3 +4,5 @@ ssh
 ln
 psql-safe
 cypher-safe
+amp
+amps

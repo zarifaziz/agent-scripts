@@ -25,17 +25,19 @@ Execute Cypher queries against Neo4j databases with two modes:
 
 ## BEFORE ANY QUERY (Required)
 
-**DO NOT skip to examples below - follow these steps first or waste time trial-erroring.**
+**DO NOT skip to examples below - follow these steps first or waste time trial-erroring.** Use a explore/subagent to perform these actions with a clear goal.
 
 Skipping protocol = 3-5 wasted queries guessing relationships. Following it = 1 precise query.
 
 ### Step 1: Export schema
+
 ```bash
 cd ~/Coding/metarepo/backend/app/resources/<your-worktree>
 mkdir -p dist/ && neo4j-usage-export resources --export dist/
 ```
 
 ### Step 2: Search codebase for existing patterns
+
 ```bash
 # Find how entities relate in existing code
 Grep "WorksheetPlan" internal/
@@ -45,20 +47,35 @@ Grep "LessonSection" internal/
 ### Step 3: THEN write your informed query
 
 ### Anti-pattern (wastes time)
+
 ```
 ❌ Jump straight to querying → guess relationships → trial-error 3+ times
    Example: "Does WorksheetPlan have HAS_SECTION? No... CONTAINS? No... let me try through Lesson..."
 ```
 
 ### Correct approach
+
 ```
 ✅ Check schema export → find existing code pattern → write 1 informed query
    Example: See code uses (wp)-[:PLANS]->(l)-[:CONTAINS]->(ls) → query works first try
 ```
 
+## When to Use Subagent
+
+**Delegate to subagent when:**
+- Unfamiliar schema or 2+ entity types with unclear relationships
+- Query involves WHERE/labels you haven't verified
+- Any cypher syntax uncertainty (subagent eats the trial-error, not your context)
+
+**Inline is fine when:**
+- Single well-known pattern you've used recently
+- Simple `MATCH (n) WHERE n.id = $id` style queries
+
+**Subagent can return a working query**, not just grep results. Ask it to explore schema AND deliver the final cypher-safe command.
+
 ---
 
-## Examples (only after completing protocol above)
+## Examples (only after completing protocol above either yourself or with subagent)
 
 ### 1. Running Against Local Database (Default)
 

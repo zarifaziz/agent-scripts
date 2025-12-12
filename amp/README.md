@@ -1,6 +1,6 @@
 # amp sandbox
 
-Permission helper + kernel-level sandbox for Amp.
+Kernel-level sandbox + permission helper for Amp on macOS.
 
 Based off of [amp-permission-docs](https://ampcode.com/manual#permissions).
 
@@ -9,53 +9,49 @@ Based off of [amp-permission-docs](https://ampcode.com/manual#permissions).
 ```bash
 git clone -b hman https://github.com/MathGaps/agent-scripts.git
 cd agent-scripts/amp
-make install
+
+
+make install-sandbox  # go builds binary to ~/.local/bin/amps (sandbox only)
+# OR
+make install          # installs amp sandbox + amp-permission-helper + config files
 ```
 
-If it fails, point your agent to this folder, give it the docs link @ https://ampcode.com/manual#permissions and ask it to install it for you :)
-
-**What it does:**
-
-- Symlinks `amp-permission-helper`, `amp-sandboxed`, `amp.sb` to `~/.local/bin/`
-- Symlinks config files to `~/.config/amp-permissions/`
-- Backs up existing `~/.config/amp/settings.json` to `.bak`, symlinks ours
+If you encounter any problem installing it, point your agent to this folder, give it the docs link @ https://ampcode.com/manual#permissions and ask it to install it for you :)
 
 ## Usage
 
-Regular `amp` uses permission-helper by default. For stricter kernel sandbox: `amp-sandboxed` (or `alias amps='amp-sandboxed'`).
+- Choose sandbox if you don't do much outside your pwd or if you're paranoid/want maximum security...
+- Two for more freedom while having cherry-picked protections
 
-| Command         | Mode              | Protection                          |
-| --------------- | ----------------- | ----------------------------------- |
-| `amp`           | permission helper | macOS popup prompts for outside-PWD |
-| `amp-sandboxed` | sandbox-exec      | kernel blocks writes outside PWD    |
+| Command                    | Mode              | Protection                                 |
+| -------------------------- | ----------------- | ------------------------------------------ |
+| `amps`                     | sandbox-exec      | Kernel blocks writes outside PWD           |
+| `amp` (with settings.json) | permission-helper | Allow everything except dangerous footguns |
 
-## Decision Pipeline
+## Tools
 
-Exit codes: `0` = allow, `1` = ask (prompt), `2` = reject (hard block)
+### Amps (Amp with Sandbox)
 
-| Check | Result | Scope |
-| ----- | ------ | ----- |
-| Catastrophic pattern in command | BLOCK (exit 2) | rm -rf /, dd, fork bombs |
-| Catastrophic pattern in script | BLOCK (exit 2) | Scripts calling bash/source with reject patterns |
-| Always-ask pattern in script | ASK (prompt) | Scripts with brew, git reset, etc. |
-| STDIN to interpreter | ASK (prompt) | Pipes to bash/python, heredocs |
-| Safe command (no metacharacters) | ALLOW | readonly + always-allowed commands |
-| Always-ask pattern | ASK (prompt) | brew install, git reset, terraform destroy |
-| All paths in always-allowed dirs | ALLOW | /tmp, metarepo |
-| No paths or all under PWD | ALLOW | Normal operations |
-| Sensitive path | ASK (prompt) | ~/.ssh, ~/.aws, /etc |
-| Outside PWD | ASK (prompt) | Anything else outside working dir |
+Kernel-level sandbox using macOS sandbox-exec (Apple Seatbelt). Based on [OpenAI Codex CLI](https://github.com/openai/codex) sandbox policies (forked and loosened a little).
 
-## Files
-
-```
-amp-permission-helper  # Amp delegate - prompts, logging, configurable
-amp-sandboxed          # Wrapper - runs amp in sandbox-exec
-amp.sb                 # macOS sandbox profile
-config/                # Editable allow/block lists
+```bash
+amps [amp args...]
 ```
 
-## Commands
+**Protection:**
+
+- File writes blocked everywhere except:
+  - PWD (folder that amp was lauched in) (with `.git` read-only)
+  - TMPDIR, user cache/var folders
+  - `~/.amp`, `~/.config/amp`, `~/.cache/amp`, `~/.local/share/amp` (needed for amp to function)
+- Network unrestricted (amp needs internet)
+- Child processes inherit sandbox (can't escape write restrictions)
+
+### amp-permission-helper
+
+Prompt-based delegate for Amp's permission system. Intercepts commands and prompts for approval when accessing sensitive paths (configurable).
+Works with regular amp command (via amp setting.json configuration)
+Amp calls our script `amp-permission-helper`for allow/block decisions.
 
 ```bash
 amp-permission-helper --test '{"cmd": "rm -rf /"}'  # test without running
@@ -63,55 +59,31 @@ amp-permission-helper --log                          # view decisions
 amp-permission-helper --edit <config>                # edit config file
 ```
 
-### Edit subcommands
+**Decision pipeline (exit codes: 0=allow, 1=ask, 2=reject):**
 
-| Subcommand | Config File | Purpose |
-| ---------- | ----------- | ------- |
-| `--edit readonly` | `readonly-commands.txt` | Truly read-only commands (ls, cat, grep) |
-| `--edit commands` | `always-allowed-commands.txt` | Side-effecty but trusted (ssh, ln) |
-| `--edit sensitive` | `sensitive-paths.txt` | High-value paths (~/.ssh, ~/.aws, /etc) |
-| `--edit reject` | `reject-patterns.txt` | Catastrophic patterns - always hard-blocked |
-| `--edit paths` | `always-allowed-paths.txt` | Directories that never prompt |
-| `--edit ask` | `always-ask-patterns.txt` | Patterns that always prompt (git reset, brew) |
-| `--edit interpreters` | `interpreters.txt` | Script interpreters to scan |
+| Check                         | Result | Examples                     |
+| ----------------------------- | ------ | ---------------------------- |
+| Catastrophic pattern          | BLOCK  | `rm -rf /`, fork bombs       |
+| Always-ask pattern            | ASK    | `brew install`, `git reset`  |
+| Sensitive path                | ASK    | `~/.ssh`, `~/.aws`           |
+| Outside PWD                   | ASK    | Anything outside working dir |
+| Safe command in allowed paths | ALLOW  | Normal operations            |
 
-## Config Philosophy
+## Config
 
-- `readonly-commands.txt`: Only commands with zero side effects (no writes, no network)
-- `always-allowed-commands.txt`: Commands you trust but have side effects (ssh, ln)
-- `reject-patterns.txt`: Catastrophic patterns - blocked in commands AND scripts
-- `sensitive-paths.txt`: High-value paths only (~/.ssh, ~/.aws, not /usr or /var)
+Config files in `~/.config/amp-permissions/`:
 
-## Always-Allowed Paths
+| File                          | Purpose                              |
+| ----------------------------- | ------------------------------------ |
+| `reject-patterns.txt`         | Catastrophic patterns - hard blocked |
+| `always-ask-patterns.txt`     | Patterns that always prompt          |
+| `sensitive-paths.txt`         | High-value paths (~/.ssh, ~/.aws)    |
+| `always-allowed-paths.txt`    | Directories that never prompt        |
+| `always-allowed-commands.txt` | Trusted commands (ssh, ln)           |
+| `readonly-commands.txt`       | Zero side-effect commands            |
 
-| Path | Purpose |
-| ---- | ------- |
-| `/tmp`, `/private/tmp` | System temp directory |
-| `/var/folders`, `/private/var/folders` | macOS per-user cache/temp |
-| `~/Coding/metarepo` | Main workspace |
+## Uninstall
 
-## Always-Allowed Commands
-
-| Command | Reason |
-| ------- | ------ |
-| `ssh` | Paths are remote, not local |
-| `ln` | Symlinks are harmless |
-| `psql-safe` | Sandboxed DB access |
-| `cypher-safe` | Sandboxed DB access |
-
-## Sensitive Paths
-
-| Path | Risk |
-| ---- | ---- |
-| `~/.ssh`, `~/.gnupg` | Keys |
-| `~/.aws`, `~/.kube` | Cloud credentials |
-| `~/.config` | App configs |
-| `~/Library/Keychains` | macOS keychain |
-| `/etc`, `/System` | System config |
-
-## Script Scanning
-
-Scripts invoked via `bash script.sh`, `./script`, `source script` are scanned:
-- Catastrophic patterns (reject-patterns.txt) → hard BLOCK
-- Always-ask patterns → prompt user
-- Recursive scanning up to depth 3
+```bash
+make uninstall
+```

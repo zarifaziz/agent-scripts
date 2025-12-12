@@ -364,8 +364,14 @@ is_rejected_pattern() {
 is_safe_command() {
     local cmd="$1"
     
+    # Strip safe redirects before checking metacharacters
+    local cmd_stripped="$cmd"
+    cmd_stripped="${cmd_stripped//2>\/dev\/null/}"
+    cmd_stripped="${cmd_stripped//>\/dev\/null/}"
+    cmd_stripped="${cmd_stripped//2>&1/}"
+    
     # Reject if shell metacharacters present (prevent piggybacking)
-    if [[ "$cmd" =~ [\|\;\&\$\`\(\)\>] ]] || [[ "$cmd" == *'<('* ]]; then
+    if [[ "$cmd_stripped" =~ [\|\;\&\`\(\)\>] ]] || [[ "$cmd_stripped" == *'<('* ]]; then
         return 1
     fi
     

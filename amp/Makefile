@@ -1,4 +1,4 @@
-.PHONY: install uninstall
+.PHONY: install install-sandbox uninstall clean
 
 SCRIPT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/
 BIN_DIR := $(HOME)/.local/bin
@@ -9,14 +9,26 @@ CONFIG_FILES := readonly-commands.txt sensitive-paths.txt reject-patterns.txt \
                 always-allowed-paths.txt always-allowed-commands.txt \
                 always-ask-patterns.txt interpreters.txt
 
-install:
-	@echo "Installing amp sandbox tools..."
-	@mkdir -p $(BIN_DIR) $(CONFIG_DIR) $(dir $(AMP_SETTINGS))
+install-sandbox:
+	@command -v go >/dev/null 2>&1 || { echo "Error: go is not installed. Install Go first: https://go.dev/dl/"; exit 1; }
+	@mkdir -p $(BIN_DIR)
+	@echo "Building amps..."
+	@go build -o $(BIN_DIR)/amps $(SCRIPT_DIR)amp-sandboxed.go
+	@echo "Built: $(BIN_DIR)/amps"
+	@if ! echo "$$PATH" | tr ':' '\n' | sed 's:/*$$::' | grep -qx "$(BIN_DIR)"; then \
+		echo ""; \
+		echo "Warning: $(BIN_DIR) is not in PATH"; \
+		echo "Add to your shell rc:"; \
+		echo "  export PATH=\"\$$HOME/.local/bin:\$$PATH\""; \
+	fi
+	@echo ""
+	@echo "Done! Run: amps"
+
+install: install-sandbox
+	@mkdir -p $(CONFIG_DIR) $(dir $(AMP_SETTINGS))
 	@ln -sf $(SCRIPT_DIR)amp-permission-helper $(BIN_DIR)/
-	@ln -sf $(SCRIPT_DIR)amp-sandboxed $(BIN_DIR)/
-	@ln -sf $(SCRIPT_DIR)amp.sb $(BIN_DIR)/
-	@chmod +x $(SCRIPT_DIR)amp-permission-helper $(SCRIPT_DIR)amp-sandboxed
-	@echo "Linked: amp-permission-helper, amp-sandboxed, amp.sb -> $(BIN_DIR)/"
+	@chmod +x $(SCRIPT_DIR)amp-permission-helper
+	@echo "Linked: amp-permission-helper -> $(BIN_DIR)/"
 	@for f in $(CONFIG_FILES); do \
 		ln -sf $(SCRIPT_DIR)config/$$f $(CONFIG_DIR)/; \
 	done
@@ -28,15 +40,12 @@ install:
 	@ln -sf $(SCRIPT_DIR)config/settings.json $(AMP_SETTINGS)
 	@echo "Linked: settings.json -> $(AMP_SETTINGS)"
 	@echo ""
-	@echo "Done! Regular amp now uses permission-helper by default."
-	@echo "For stricter sandbox mode: amp-sandboxed"
-	@echo "Or add alias: alias amps='amp-sandboxed'"
+	@echo "Done! Commands: amps, amp-permission-helper"
 
 uninstall:
-	@echo "Uninstalling amp sandbox tools..."
+	@echo "Uninstalling..."
+	@rm -f $(BIN_DIR)/amps
 	@rm -f $(BIN_DIR)/amp-permission-helper
-	@rm -f $(BIN_DIR)/amp-sandboxed
-	@rm -f $(BIN_DIR)/amp.sb
 	@for f in $(CONFIG_FILES); do \
 		rm -f $(CONFIG_DIR)/$$f; \
 	done
@@ -46,3 +55,7 @@ uninstall:
 		echo "Restored: $(AMP_SETTINGS).bak -> $(AMP_SETTINGS)"; \
 	fi
 	@echo "Uninstall complete"
+
+clean:
+	@rm -f $(BIN_DIR)/amps
+	@echo "Removed $(BIN_DIR)/amps"
