@@ -21,7 +21,44 @@ Execute Cypher queries against Neo4j databases with two modes:
 - Primary: `cypher-safe`
 - Fallback: `/Users/mac/.local/bin/cypher-safe`
 
-## Basic Usage
+---
+
+## BEFORE ANY QUERY (Required)
+
+**DO NOT skip to examples below - follow these steps first or waste time trial-erroring.**
+
+Skipping protocol = 3-5 wasted queries guessing relationships. Following it = 1 precise query.
+
+### Step 1: Export schema
+```bash
+cd ~/Coding/metarepo/backend/app/resources/<your-worktree>
+mkdir -p dist/ && neo4j-usage-export resources --export dist/
+```
+
+### Step 2: Search codebase for existing patterns
+```bash
+# Find how entities relate in existing code
+Grep "WorksheetPlan" internal/
+Grep "LessonSection" internal/
+```
+
+### Step 3: THEN write your informed query
+
+### Anti-pattern (wastes time)
+```
+❌ Jump straight to querying → guess relationships → trial-error 3+ times
+   Example: "Does WorksheetPlan have HAS_SECTION? No... CONTAINS? No... let me try through Lesson..."
+```
+
+### Correct approach
+```
+✅ Check schema export → find existing code pattern → write 1 informed query
+   Example: See code uses (wp)-[:PLANS]->(l)-[:CONTAINS]->(ls) → query works first try
+```
+
+---
+
+## Examples (only after completing protocol above)
 
 ### 1. Running Against Local Database (Default)
 
