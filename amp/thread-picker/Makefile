@@ -1,0 +1,55 @@
+.PHONY: install uninstall
+
+SCRIPT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/
+BIN_DIR := $(HOME)/.local/bin
+LAUNCHAGENTS_DIR := $(HOME)/Library/LaunchAgents
+PLIST_NAME := com.amp.thread-indexer.plist
+SCRIPTS := amp-thread-picker amp-live amp-thread-indexer
+
+install:
+	@echo "Installing amp-thread-picker tools..."
+	@mkdir -p $(BIN_DIR) $(LAUNCHAGENTS_DIR)
+	@for script in $(SCRIPTS); do \
+		ln -sfn $(SCRIPT_DIR)$$script $(BIN_DIR)/$$script; \
+		echo "  Linked: $(BIN_DIR)/$$script -> $(SCRIPT_DIR)$$script"; \
+	done
+	@if launchctl list 2>/dev/null | grep -q "com.amp.thread-indexer"; then \
+		echo "  Unloading existing service..."; \
+		launchctl bootout "gui/$$(id -u)/com.amp.thread-indexer" 2>/dev/null || true; \
+	fi
+	@sed "s|__HOME__|$(HOME)|g" $(SCRIPT_DIR)$(PLIST_NAME) > $(LAUNCHAGENTS_DIR)/$(PLIST_NAME)
+	@echo "  Installed: $(LAUNCHAGENTS_DIR)/$(PLIST_NAME)"
+	@echo "  Loading indexer service..."
+	@launchctl bootstrap "gui/$$(id -u)" $(LAUNCHAGENTS_DIR)/$(PLIST_NAME) 2>/dev/null || true
+	@if [ ! -f "$(HOME)/.cache/amp_threads.db" ]; then \
+		echo "  Running initial index (this may take a moment)..."; \
+		$(BIN_DIR)/amp-thread-indexer --force; \
+	else \
+		echo "  Database exists, running incremental sync..."; \
+		$(BIN_DIR)/amp-thread-indexer & \
+	fi
+	@echo ""
+	@echo "Installation complete!"
+	@echo ""
+	@echo "Scripts installed:"
+	@echo "  - amp-thread-picker : Search all amp threads (bind to prefix-@)"
+	@echo "  - amp-live          : Switch to live amp sessions (bind to prefix-a)"
+	@echo "  - amp-thread-indexer: Background indexer (runs every 5 min)"
+	@echo ""
+	@echo "Add to ~/.tmux.conf:"
+	@echo '  bind-key @ popup -w 70% -h 70% -E "$$HOME/.local/bin/amp-thread-picker"'
+	@echo '  bind-key a popup -w 85% -h 75% -E "$$HOME/.local/bin/amp-live"'
+	@echo ""
+	@echo "Force re-index: amp-thread-indexer --force"
+
+uninstall:
+	@echo "Uninstalling amp-thread-picker tools..."
+	@if launchctl list 2>/dev/null | grep -q "com.amp.thread-indexer"; then \
+		echo "  Unloading service..."; \
+		launchctl bootout "gui/$$(id -u)/com.amp.thread-indexer" 2>/dev/null || true; \
+	fi
+	@rm -f $(LAUNCHAGENTS_DIR)/$(PLIST_NAME)
+	@for script in $(SCRIPTS); do \
+		rm -f $(BIN_DIR)/$$script; \
+	done
+	@echo "Uninstall complete"
