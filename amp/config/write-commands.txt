@@ -1,0 +1,53 @@
+# Commands that need path checking (potential destructive writes)
+# Everything else is treated as readonly and auto-allowed
+
+# Destructive file ops
+rm
+rmdir
+shred
+truncate
+
+# File copy/move/sync (can overwrite/delete)
+cp
+mv
+scp
+rsync
+tar
+
+# Disk destruction
+dd
+mkfs
+
+# Package managers (system changes)
+brew
+apt
+apt-get
+yum
+dnf
+pacman
+pip
+pip3
+npm
+yarn
+pnpm
+cargo
+
+# Network download (can fetch malicious content)
+curl
+wget
+
+# Note: find is NOT here - it's read-only by itself
+# find -exec/-delete is caught by risky_patterns in Go parser
+
+# Symlinks (can redirect files)
+ln
+
+# Archive extraction (can overwrite files)
+unzip
+7z
+7za
+
+# Process killing
+kill
+pkill
+killall

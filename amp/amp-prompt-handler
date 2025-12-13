@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+#
+# amp-prompt-handler - Default prompt handler for amp-permission-eval
+#
+# Receives JSON on stdin:
+# {
+#   "title": "CONFIRM" | "SENSITIVE" | "OUTSIDE PWD" | etc,
+#   "message": "Human readable message",
+#   "context": {
+#     "cmd": "the full command",
+#     "pwd": "/current/working/dir",
+#     "tool": "Bash" | "edit_file" | etc,
+#     "tmux": "session:window(pane)" | "no-tmux"
+#   }
+# }
+#
+# Exit codes:
+#   0 = allow
+#   1 = deny
+#
+# Features:
+#   - macOS osascript dialog with Allow/Deny/Visit buttons
+#   - Visit button switches to tmux pane and re-prompts
+#   - 60s timeout with notification
+#   - TTY fallback when osascript unavailable
+
+set -uo pipefail
+
+# Read JSON from stdin
+INPUT=$(cat)
+
+TITLE=$(echo "$INPUT" | jq -r '.title // "Permission"')
+MESSAGE=$(echo "$INPUT" | jq -r '.message // ""')
+CMD=$(echo "$INPUT" | jq -r '.context.cmd // ""')
+PWD_PATH=$(echo "$INPUT" | jq -r '.context.pwd // ""')
+TOOL=$(echo "$INPUT" | jq -r '.context.tool // ""')
+TMUX_CTX=$(echo "$INPUT" | jq -r '.context.tmux // "no-tmux"')
+
+# Config
+LOG_FILE="${AMP_PROMPT_LOG:-$HOME/.config/amp-permissions/prompt.log}"
+TIMEOUT_SECS="${AMP_PROMPT_TIMEOUT:-60}"
+
+log_prompt() {
+    local result="$1"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] [$TMUX_CTX] $result | $TITLE | $CMD" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+#------------------------------------------------------------------------------
+# osascript dialog (macOS)
+#------------------------------------------------------------------------------
+
+prompt_osascript() {
+    command -v osascript &>/dev/null || return 1
+    
+    local escaped_msg="${MESSAGE//\"/\\\"}"
+    local escaped_title="${TITLE//\"/\\\"}"
+    
+    # Include tmux context in title
+    local full_title="[$TMUX_CTX] $escaped_title"
+    
+    while true; do
+        local osa_output result gave_up
+        local buttons='{"Deny", "Allow"}'
+        
+        # Add Visit button if in tmux
+        if [[ "$TMUX_CTX" != "no-tmux" ]] && [[ -n "${TMUX:-}" ]]; then
+            buttons='{"Deny", "Visit", "Allow"}'
+        fi
+        
+        osa_output=$(osascript -e "
+            set dialogResult to display dialog \"$escaped_msg\" with title \"$full_title\" buttons $buttons default button \"Deny\" with icon caution giving up after $TIMEOUT_SECS
+            return (button returned of dialogResult) & \"|\" & (gave up of dialogResult)
+        " 2>/dev/null) || osa_output="|true"
+        
+        result="${osa_output%%|*}"
+        gave_up="${osa_output##*|}"
+        
+        # Handle Visit button
+        if [[ "$result" == "Visit" ]]; then
+            visit_tmux_pane
+            sleep 0.3
+            continue  # Re-show dialog
+        fi
+        
+        # Handle timeout
+        if [[ "$gave_up" == "true" ]]; then
+            send_timeout_notification
+            log_prompt "TIMEOUT"
+        fi
+        
+        break
+    done
+    
+    if [[ "$result" == "Allow" ]]; then
+        log_prompt "ALLOW"
+        return 0
+    else
+        log_prompt "DENY"
+        return 1
+    fi
+}
+
+visit_tmux_pane() {
+    [[ -z "${TMUX:-}" ]] && return
+    
+    local target
+    if [[ -n "${TMUX_PANE:-}" ]]; then
+        target=$(tmux display-message -t "$TMUX_PANE" -p '#S:#I' 2>/dev/null)
+    else
+        target=$(tmux display-message -p '#S:#I' 2>/dev/null)
+    fi
+    
+    tmux switch-client -t "$target" 2>/dev/null || \
+    tmux select-window -t "$target" 2>/dev/null
+    
+    # Bring terminal to front
+    local term_app
+    for app in WezTerm iTerm Alacritty kitty Terminal; do
+        if pgrep -qf "$app"; then
+            term_app="$app"
+            break
+        fi
+    done
+    [[ -n "$term_app" ]] && open -a "$term_app"
+}
+
+send_timeout_notification() {
+    local notif_title="Amp Permission"
+    [[ "$TMUX_CTX" != "no-tmux" ]] && notif_title="Amp Permission [$TMUX_CTX]"
+    
+    local pwd_short=$(echo "$PWD_PATH" | awk -F/ '{print $(NF-1)"/"$NF}')
+    
+    osascript -e "display notification \"Timed out - auto denied\n[$pwd_short]\" with title \"$notif_title\" sound name \"Basso\"" 2>/dev/null || true
+}
+
+#------------------------------------------------------------------------------
+# TTY prompt (fallback)
+#------------------------------------------------------------------------------
+
+prompt_tty() {
+    local tty_device="/dev/tty"
+    
+    # Try to get tmux pane TTY
+    if [[ -n "${TMUX:-}" ]]; then
+        local pane_tty=$(tmux display-message -p '#{pane_tty}' 2>/dev/null)
+        [[ -n "$pane_tty" ]] && tty_device="$pane_tty"
+    fi
+    
+    # Check if TTY is available
+    if [[ ! -w "$tty_device" ]]; then
+        return 1
+    fi
+    
+    {
+        echo ""
+        echo "=== AMP PERMISSION ==="
+        echo "[$TMUX_CTX] $TITLE"
+        echo ""
+        echo "$MESSAGE"
+        echo ""
+        [[ -n "$CMD" ]] && echo "Command: $CMD"
+        [[ -n "$PWD_PATH" ]] && echo "PWD: $PWD_PATH"
+        echo ""
+        printf "Allow? [y/N]: "
+    } > "$tty_device"
+    
+    local response
+    read -r -t "$TIMEOUT_SECS" response < "$tty_device" 2>/dev/null || response="n"
+    
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        log_prompt "ALLOW"
+        return 0
+    else
+        log_prompt "DENY"
+        return 1
+    fi
+}
+
+#------------------------------------------------------------------------------
+# Main
+#------------------------------------------------------------------------------
+
+# Try osascript first (macOS native)
+if prompt_osascript; then
+    exit 0
+fi
+
+# osascript failed or returned deny - check if it was a real deny or just unavailable
+# If osascript command exists but user denied, we already exited via the function
+# If we're here from osascript, it means user denied
+
+# Try TTY fallback
+if [[ -t 0 ]] || [[ -n "${TMUX:-}" ]]; then
+    if prompt_tty; then
+        exit 0
+    fi
+    exit 1
+fi
+
+# No prompt method available
+log_prompt "NO_PROMPT_METHOD"
+exit 1

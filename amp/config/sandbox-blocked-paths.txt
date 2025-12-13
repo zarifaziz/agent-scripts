@@ -1,0 +1,35 @@
+# Paths blocked at kernel level by sandbox (write-protected)
+# Use $HOME for home directory
+# These are HARD blocks - no prompt, just denied
+
+# SSH/GPG keys
+$HOME/.ssh
+$HOME/.gnupg
+
+# Cloud credentials
+$HOME/.aws
+$HOME/.azure
+$HOME/.kube
+$HOME/.config/gcloud
+
+# Auth/credential files
+$HOME/.netrc
+$HOME/.npmrc
+$HOME/.pypirc
+$HOME/.docker/config.json
+$HOME/.config/gh
+
+# Database credentials
+$HOME/.pgpass
+$HOME/.my.cnf
+$HOME/.neo4j
+$HOME/.rediscli_history
+
+# macOS keychains
+$HOME/Library/Keychains
+
+# System paths
+/etc
+/System
+/Library
+/usr/local/etc
