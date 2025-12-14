@@ -1,0 +1,10 @@
+{
+  "amp.permissions": [
+    {
+      "tool": "*",
+      "action": "delegate",
+      "to": "amp-permission"
+    }
+  ],
+  "amp.guardedFiles.allowlist": ["$HOME/.config/**"]
+}

@@ -1,8 +1,0 @@
-# Sensitive paths - always prompt
-$HOME/.ssh
-$HOME/.gnupg
-$HOME/.aws
-$HOME/.kube
-$HOME/Library/Keychains
-/etc
-/System

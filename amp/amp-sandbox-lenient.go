@@ -45,20 +45,10 @@ func run() error {
 		return err
 	}
 
-	pwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get working directory: %w", err)
-	}
-	canonicalPwd, err := filepath.EvalSymlinks(pwd)
-	if err != nil {
-		canonicalPwd = pwd
-	}
-
 	home := os.Getenv("HOME")
 	blockedPaths := loadBlockedPaths(home)
-	gitDirs := findAllGitDirs(canonicalPwd)
 
-	policy := buildReversePolicy(blockedPaths, gitDirs)
+	policy := buildReversePolicy(blockedPaths)
 
 	args := []string{"-p", policy, "--", ampBin}
 	args = append(args, os.Args[1:]...)
@@ -70,17 +60,13 @@ func run() error {
 		for _, bp := range blockedPaths {
 			fmt.Printf("  %s (%s)\n", bp.Path, bp.Description)
 		}
-		fmt.Println("=== .git DIRS ===")
-		for _, g := range gitDirs {
-			fmt.Printf("  %s\n", g)
-		}
 		return nil
 	}
 
 	return syscall.Exec("/usr/bin/sandbox-exec", append([]string{"sandbox-exec"}, args...), os.Environ())
 }
 
-func buildReversePolicy(blocked []BlockedPath, gitDirs []string) string {
+func buildReversePolicy(blocked []BlockedPath) string {
 	var sb strings.Builder
 	sb.WriteString(basePolicy)
 
@@ -93,25 +79,14 @@ func buildReversePolicy(blocked []BlockedPath, gitDirs []string) string {
 		sb.WriteString(fmt.Sprintf("(deny file-write* (subpath %q))\n", bp.Path))
 	}
 
-	if len(gitDirs) > 0 {
-		sb.WriteString("\n; .git directories (protected from writes)\n")
-		for _, gitDir := range gitDirs {
-			sb.WriteString(fmt.Sprintf("(deny file-write* (subpath %q))\n", gitDir))
-		}
-	}
-
-	sb.WriteString("\n; .git regex fallback (catch any .git we missed)\n")
-	sb.WriteString(`(deny file-write* (regex #"^.*/\.git(/.*)?$"))`)
-	sb.WriteString("\n")
-
 	return sb.String()
 }
 
 func loadBlockedPaths(home string) []BlockedPath {
 	configPath := filepath.Join(home, ".config/amp-permissions/sandbox-blocked-paths.txt")
-	
+
 	var paths []BlockedPath
-	
+
 	data, err := os.ReadFile(configPath)
 	if err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
@@ -127,7 +102,7 @@ func loadBlockedPaths(home string) []BlockedPath {
 			})
 		}
 	}
-	
+
 	// Fallback defaults if config empty/missing
 	if len(paths) == 0 {
 		paths = []BlockedPath{
@@ -141,33 +116,8 @@ func loadBlockedPaths(home string) []BlockedPath {
 			{Path: "/Library", Description: "System Library"},
 		}
 	}
-	
+
 	return paths
-}
-
-func findAllGitDirs(root string) []string {
-	var gitDirs []string
-
-	gitDir := filepath.Join(root, ".git")
-	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
-		gitDirs = append(gitDirs, gitDir)
-	}
-
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return gitDirs
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		subGit := filepath.Join(root, entry.Name(), ".git")
-		if info, err := os.Stat(subGit); err == nil && info.IsDir() {
-			gitDirs = append(gitDirs, subGit)
-		}
-	}
-
-	return gitDirs
 }
 
 func findAmp() (string, error) {

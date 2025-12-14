@@ -1,0 +1,389 @@
+# Amp Permission System - Unified Configuration
+# All policy rules in one place
+
+paths:
+  # Paths that always prompt (even for read operations)
+  sensitive:
+    - $HOME/.ssh
+    - $HOME/.gnupg
+    - $HOME/.aws
+    - $HOME/.kube
+    - $HOME/Library/Keychains
+    - /etc
+    - /private/etc
+    - /System
+
+  # Paths where operations are always allowed without prompts
+  # Note: macOS symlinks /tmp->/private/tmp, /var->/private/var, /etc->/private/etc
+  always_allowed:
+    - /tmp
+    - /private/tmp
+    - /var/folders
+    - /private/var/folders
+    - /dev/null
+    - $HOME/Coding/metarepo
+
+  # Paths blocked at sandbox kernel level (hard block, no prompt)
+  sandbox_blocked:
+    - $HOME/.ssh
+    - $HOME/.gnupg
+    - $HOME/.aws
+    - $HOME/.azure
+    - $HOME/.kube
+    - $HOME/.config/gcloud
+    - $HOME/.netrc
+    - $HOME/.npmrc
+    - $HOME/.pypirc
+    - $HOME/.docker/config.json
+    - $HOME/.config/gh
+    - $HOME/.pgpass
+    - $HOME/.my.cnf
+    - $HOME/.neo4j
+    - $HOME/.rediscli_history
+    - $HOME/Library/Keychains
+    - /etc
+    - /private/etc
+    - /System
+    - /Library
+    - /usr/local/etc
+
+patterns:
+  # Catastrophic patterns - always blocked (exit 2)
+  # NOTE: Most command+target combos are handled by commands.dangerous_targets via AST
+  # This list catches things that can't be parsed or need early string matching
+  reject:
+    # Fork bombs
+    - ":(){:|:&};:"
+    - ":(){ :|:& };:"
+    - "bomb(){ bomb|bomb& };bomb"
+    # xargs is dangerous - can bypass arg checking
+    - "xargs rm"
+    - "xargs -I"
+    # Device writes
+    - "of=/dev/sd"
+    - "of=/dev/disk"
+    - "of=/dev/nvme"
+    - "> /dev/sd"
+    # Variable injection attacks
+    - "rm -rf $/"
+    - "rm -rf ${"
+    - ":-/}"
+    - "$UNSET_VAR/"
+    # Path traversal
+    - "/../../../"
+    # mkfs (filesystem format)
+    - "mkfs"
+    # sudo/doas with dangerous commands
+    - "sudo rm -rf"
+    - "doas rm -rf"
+    - "sudo dd if=/dev"
+    - "doas dd if=/dev"
+
+  # Patterns that always prompt for confirmation (regex)
+  always_ask:
+    # Package managers (^ = start of command, avoids false positives like echo "pip install")
+    - "^(sudo )?brew (install|uninstall|remove|upgrade)"
+    - "^(sudo )?(pip|pip3) install"
+    - "^(sudo )?uv (add|pip install|tool install)"
+    - "^(sudo )?pipx (install|upgrade|uninstall)"
+    - "^(sudo )?npm (install|uninstall|update)( -g| --global)"
+    - "^(sudo )?bun (add|install|remove)"
+    - "^(sudo )?yarn (add|remove)"
+    - "^(sudo )?pnpm (add|remove)"
+    - "^(sudo )?cargo install"
+    - "^(sudo )?go install"
+    # Git destructive (discard uncommitted changes - irrecoverable)
+    - "^git checkout -- "
+    - "^git checkout .* -- "
+    - "^git checkout -f"
+    - "^git checkout --force"
+    - "^git restore"
+    - "^git reset"
+    - "^git clean"
+    - "^git stash drop"
+    - "^git stash clear"
+    - "^git branch -[dD]"
+    - "^git push.*--force"
+    - "^git push.*-f"
+    - "^git rebase"
+    - "^git submodule deinit"
+    - "^git worktree remove"
+    # Remote + execute chains
+    - "(scp|sftp|curl|wget).*&&"
+    - "(scp|sftp|curl|wget).*;"
+    - "git clone.*&&"
+    - "git clone.*;"
+    # Xargs with commands
+    - "xargs.*(bash|sh|zsh|python|node)"
+    # Lang runtimes destructive
+    - "fs\\.rmSync|fs\\.rmdirSync|fs\\.unlinkSync"
+    - "FileUtils\\.rm_rf|FileUtils\\.remove"
+    - "awk.*system\\("
+    - "eval\\(.*rm"
+    - "exec\\(.*rm"
+    # Database destructive
+    - "DROP DATABASE"
+    - "DROP TABLE"
+    - "DROP SCHEMA"
+    - "TRUNCATE"
+    - "FLUSHALL"
+    - "FLUSHDB"
+    - "dropDatabase"
+    - "DETACH DELETE"
+    - "DELETE FROM.*WHERE 1"
+    - "DELETE FROM [^W]*$"
+    - "prisma migrate reset"
+    - "prisma db push.*--force"
+    # Cloud/infra destructive
+    - "aws s3 rm.*--recursive"
+    - "aws s3 rb"
+    - "terraform destroy"
+    - "terraform apply.*-auto-approve"
+    - "pulumi destroy"
+    - "gcloud.*delete"
+    - "az.*delete"
+    - "kubectl delete"
+    - "helm uninstall"
+    - "aws ec2 terminate"
+    # Docker destructive
+    - "docker rm.*-f.*\\$\\("
+    - "docker system prune"
+    - "docker volume rm.*\\$\\("
+    - "docker rmi.*\\$\\("
+    - "docker container prune"
+    - "docker image prune"
+    - "docker network prune"
+    # Process management
+    - "tmux kill-server"
+    - "tmux kill-session"
+    - "pkill -9"
+    - "pkill.*neo4j"
+    - "pkill.*docker"
+    - "pkill.*postgres"
+    - "killall"
+    # GitHub CLI
+    - "gh repo delete"
+    - "gh release delete"
+    - "gh pr close.*--delete-branch"
+
+    # Symlink overwrites to shell config dotfiles
+    - "^ln -sf.*\\.bashrc"
+    - "^ln -sf.*\\.zshrc"
+    - "^ln -sf.*\\.profile"
+    - "^ln -sf.*\\.bash_profile"
+    # Env file destruction
+    - "^rm \\.env"
+    - "^echo >.*\\.env"
+    - "^cat >.*\\.env"
+    - "truncate.*\\.env"
+    # Misc
+    - "^yes.*\\|"
+    - "while.*read.*rm"
+    - "for.*rm -rf"
+    - "gsutil.*rm.*-r"
+    - "gsutil.*-m.*rm"
+    - "restore-db"
+
+commands:
+  # Commands that perform write operations (need path checking)
+  # Everything else is read-only and auto-allowed
+  write:
+    - rm
+    - rmdir
+    - shred
+    - truncate
+    - cp
+    - mv
+    - scp
+    - rsync
+    - tar
+    - dd
+    - mkfs
+    - brew
+    - apt
+    - apt-get
+    - yum
+    - dnf
+    - pacman
+    - pip
+    - pip3
+    - npm
+    - yarn
+    - pnpm
+    - cargo
+    - curl
+    - wget
+    - ln
+    - unzip
+    - 7z
+    - 7za
+    - kill
+    - pkill
+    - killall
+
+  # Dangerous targets - block if ANY argument to a write command matches these
+  # Works with AST parsing so catches: rm /foo ~ /bar (~ anywhere in args)
+  dangerous_targets:
+    - /
+    - /*
+    - ~
+    - ~/*
+    - $HOME
+    - $HOME/*
+    - /Users
+    - /Users/*
+    - .
+    - ./*
+    - .git
+    - ..
+    - ../*
+
+  # Dangerous flags - block specific command + flag combos
+  # Format: "command:flag" - blocks if command has this flag
+  dangerous_flags:
+    - "rm:-rf"
+    - "rm:-fr"
+    - "rm:-Rf"
+    - "rm:-fR"
+    - "chmod:-R 777"
+    - "chown:-R"
+    - "rsync:--delete"
+    - "find:-delete"
+
+  # Find -exec: block if exec'd command is a write command
+  # These flags trigger write-command checking for find
+  find_exec_flags:
+    - -exec
+    - -execdir
+    - -ok
+    - -okdir
+
+  # Network commands - pipes from these always prompt
+  network:
+    - curl
+    - wget
+    - fetch
+    - http
+    - https
+
+# Interpreters with their dangerous patterns for scan-and-prompt
+interpreters:
+  bash:
+    aliases: [sh, zsh, dash, fish, ksh, csh, tcsh]
+    patterns:
+      - "rm -rf"
+      - "rm -r"
+      - "dd if="
+      - "> /dev/"
+      - "mkfs"
+      - "chmod 777"
+      - "chmod -R"
+      - "chown -R"
+      - ":(){ :|:& };"
+      - "curl.*|.*sh"
+      - "wget.*|.*sh"
+
+  python:
+    aliases: [python3, py, py3, python2]
+    patterns:
+      - "shutil.rmtree"
+      - "shutil.move"
+      - "os.remove"
+      - "os.unlink"
+      - "os.rmdir"
+      - "os.removedirs"
+      - "pathlib.Path.unlink"
+      - "pathlib.Path.rmdir"
+      - "subprocess.run"
+      - "subprocess.call"
+      - "subprocess.Popen"
+      - "os.system"
+      - "exec("
+      - "eval("
+      - "open(.*, 'w')"
+      - "__import__"
+
+  node:
+    aliases: [bun, deno, nodejs, npx, tsx, ts-node]
+    patterns:
+      - "fs.rmSync"
+      - "fs.rmdirSync"
+      - "fs.unlinkSync"
+      - "fs.writeFileSync"
+      - "fsPromises.rm"
+      - "fsPromises.unlink"
+      - "rimraf"
+      - "del-cli"
+      - "child_process"
+      - "execSync"
+      - "spawnSync"
+      - "exec("
+      - "eval("
+
+  ruby:
+    aliases: [irb, jruby]
+    patterns:
+      - "FileUtils.rm_rf"
+      - "FileUtils.rm_r"
+      - "FileUtils.remove"
+      - "File.delete"
+      - "Dir.rmdir"
+      - "system("
+      - "exec("
+      - "backtick"
+      - "Open3"
+
+  perl:
+    aliases: [perl5, perl6, raku]
+    patterns:
+      - "unlink"
+      - "rmdir"
+      - "rmtree"
+      - "system("
+      - "exec("
+      - "qx/"
+
+  php:
+    aliases: [php8, php7]
+    patterns:
+      - "unlink("
+      - "rmdir("
+      - "exec("
+      - "shell_exec("
+      - "system("
+      - "passthru("
+      - "proc_open"
+      - "file_put_contents"
+
+  lua:
+    aliases: [luajit, lua5.4, lua5.3]
+    patterns:
+      - "os.remove"
+      - "os.execute"
+      - "io.popen"
+
+  awk:
+    aliases: [gawk, mawk, nawk]
+    patterns:
+      - "system\\("
+      - "getline.*\\|"
+      - "print.*\\|"
+      - "\\| getline"
+
+  sed:
+    aliases: [gsed]
+    patterns:
+      - "-i"
+      - "--in-place"
+
+# Prompt settings
+prompt:
+  timeout_secs: 60
+  log_file: $HOME/.config/amp-permissions/decisions.log
+  max_log_lines: 100
+
+# Script scanning limits
+script_scan:
+  max_bytes: 102400 # 100KB
+  max_lines: 2000
+  max_depth: 3

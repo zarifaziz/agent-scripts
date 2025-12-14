@@ -1,205 +1,222 @@
-# amp sandbox
+# Amp Permission System
 
-Kernel-level sandbox + permission helper for Amp on macOS.
+Kernel-level sandbox + permission evaluator for Amp on macOS.
 
 Based on [Amp permission docs](https://ampcode.com/manual#permissions) and [OpenAI Codex CLI](https://github.com/openai/codex) sandbox policies.
 
 ## Install
 
 ```bash
-git clone -b hman https://github.com/hemanta212/agent-scripts.git
+git clone -b hman https://github.com/MathGaps/agent-scripts.git
 cd agent-scripts/amp
 
-make install-strict   # Installs 'samp' -- strict sandbox
+make install-strict   # Strict sandbox only (samp)
 
-make install          # Lenient sandbox + permission helper + configs
+make install          # Permission system + lenient sandbox
 ```
 
-If stuck, point your agent to this folder + the [amp docs](https://ampcode.com/manual#permissions) and ask it to install.
+In case of any issues, point your agent to this folder + the [amp docs](https://ampcode.com/manual#permissions) and ask it to install it for you.
 
 ## Commands
 
-| Command | Sandbox                            | Protection                                 |
-| ------- | ---------------------------------- | ------------------------------------------ |
-| `samp`  | Strict, security-first (allowlist) | Blocks ALL writes outside PWD              |
-| `amps`  | Lenient, security-last (blocklist) | Only blocks sensitive paths                |
-| `amp`   | None                               | Permission helper only (via settings.json) |
+| Command | Sandbox             | Protection                                                         |
+| ------- | ------------------- | ------------------------------------------------------------------ |
+| `amp`   | None                | Permission helper integration only (via settings.json)             |
+| `amps`  | Lenient (blocklist) | Permission helper + cherry-picked sandbox protection on some paths |
+| `samp`  | Strict (allowlist)  | Blocks ALL writes outside PWD                                      |
 
-## 1. Lenient Sandbox (`amps`)
+## Strict Sandbox (`samp`)
 
-Blocklist sandbox + Go shell parser + Bash policy. Permissive, minimal prompts.
-
-```bash
-amps [amp args...]
-```
-
-**Architecture:**
-
-```
-Command → Go Parser (AST) → Bash Evaluator → Prompt Handler
-              ↓                    ↓               ↓
-         Detect patterns     Expand vars      osascript/TTY
-         Check configs       Check paths
-```
-
-**Layers:**
-
-| Layer | Component      | Protection                                   |
-| ----- | -------------- | -------------------------------------------- |
-| 1     | Kernel sandbox | Hard blocks writes to sensitive paths        |
-| 2     | Go parser      | Detects dangerous patterns, pipes, heredocs  |
-| 3     | Bash eval      | Variable expansion, path resolution, prompts |
-
-**Decision flow:**
-
-| Check                    | Result | Examples                         |
-| ------------------------ | ------ | -------------------------------- |
-| Risky pattern            | BLOCK  | `rm -rf ~`, fork bombs           |
-| Read-only command        | ALLOW  | `cat`, `grep`, `ls` piped        |
-| Always-ask pattern       | ASK    | `brew install`, `kubectl delete` |
-| Sensitive path           | ASK    | `~/.ssh/*`, `~/.aws/*`           |
-| Single file outside PWD  | ALLOW  | `rm /tmp/file.txt`               |
-| Directory op outside PWD | ASK    | `rm -r /usr/local/foo`           |
-
-## 2. Strict Sandbox (`samp`)
-
-Kernel blocks ALL writes outside PWD. Simple, paranoid.
+Use this if you're mostly operating/editing files under a project folder + want simple security enforced at the OS layer.
 
 ```bash
 samp [amp args...]
 ```
 
-| Writable              | Blocked                    |
-| --------------------- | -------------------------- |
-| PWD (except .git)     | Everything else            |
-| TMPDIR, cache dirs    | ~/.ssh, ~/.aws, /etc, etc. |
-| ~/.amp, ~/.config/amp |                            |
+- Kernel blocks ALL\* writes outside working directory (pwd).
+- Any child process/script run by amp is also subject to same sandbox.
+- Based direcly off of [OpenAI Codex CLI](https://github.com/openai/codex) sandbox policies (Uses macos `sandbox-exec` under the hood).
 
-Best for: Maximum security, single project work.
+\*: /dev/null, /tmp, and some amp specific dirs are writable for amp to function properly
 
-## Config Files
+| Writable              | Blocked              |
+| --------------------- | -------------------- |
+| PWD                   | Everything else      |
+| TMPDIR, /tmp, cache   | ~/.ssh, ~/.aws, /etc |
+| ~/.amp, ~/.config/amp |                      |
 
-All in `~/.config/amp-permissions/`:
+## Lenient Sandbox (`amps`)
 
-### sandbox-blocked-paths.txt
-
-Kernel-level write blocks (lenient sandbox). No prompt, just denied.
-
-```
-$HOME/.ssh
-$HOME/.aws
-$HOME/.config/gcloud
-/etc
-```
-
-### reject-patterns.txt
-
-Command patterns - hard blocked by parser.
-
-```
-rm -rf ~
-rm -rf $HOME
-dd if=/dev/zero
-:(){:|:&};:
-```
-
-### always-ask-patterns.txt
-
-Regex patterns that always prompt.
-
-```
-^brew (install|uninstall|upgrade)
-^git reset
-kubectl delete
-terraform destroy
-```
-
-### write-commands.txt
-
-Commands needing path checks. Everything else is read-only (auto-allowed).
-
-```
-rm
-rmdir
-dd
-brew
-pip
-```
-
-### sensitive-paths.txt
-
-Paths that prompt before access.
-
-```
-$HOME/.ssh
-$HOME/.gnupg
-/etc
-```
-
-### interpreters.txt
-
-Pipe-to-interpreter triggers prompt.
-
-```
-bash
-python
-node
-```
-
-### always-allowed-paths.txt
-
-Skip all checks.
-
-```
-/tmp
-/var/folders
-```
-
-## Testing
+basically **DangerouslyAllowAll** but pragmatic
 
 ```bash
-amp-permission-eval --test '{"cmd": "rm -rf ~"}'
-amp-permission-eval --parse 'cat ~/.ssh/id_rsa | bash'
-amp-permission-eval --log
+amps [amp args...]
 ```
 
-## Custom Prompt Handler
+- Block-list approach: allow everything by default and configure block list (`permissions.yaml`)
+- Only covers accidental footguns, not malicious intent
+- Ampcode stops the agent on any deny, no "agent going trial and error routes for workaround" problem
+- Default configuration covers simple mistakes, injections, tutero-specific tool gaurds, curl/brew installation prompts
+- Goal is to ruthlessly minimize the permission prompts, while having some protection over "dangerouslyAllowAll" approach, configurable as per your liking.
 
-```bash
-export AMP_PERMISSION_PROMPT_HANDLER=/path/to/handler
+**Decision flow:**
+
+| Check               | Result | Examples                                                   |
+| ------------------- | ------ | ---------------------------------------------------------- |
+| Reject pattern      | BLOCK  | Fork bombs, xargs rm, device writes                        |
+| Dangerous target    | BLOCK  | Any write command with `/`, `~`, `$HOME`, `.git` as arg    |
+| Dangerous flag      | BLOCK  | `rm -rf`, `chmod -R 777`, `rsync --delete`, `find -delete` |
+| Find -exec          | BLOCK  | `find -exec rm` (write command in exec)                    |
+| Pipe to interpreter | SCAN   | Network source → prompt, local file → scan for patterns    |
+| Heredoc             | SCAN   | Scan content for dangerous patterns                        |
+| Always-ask pattern  | PROMPT | `brew install`, `kubectl delete`, `git reset`              |
+| Sensitive path      | PROMPT | `~/.ssh/*`, `~/.aws/*`                                     |
+| Read-only command   | ALLOW  | `cat`, `grep`, `ls`, `find -exec grep`                     |
+| Write outside PWD   | PROMPT | Directory operations                                       |
+
+## Architecture of Amps (Lenient permission handler)
+
+```
+┌─────────────────────────────┐     ┌─────────────────────────────┐
+│  amp-permission (Go)        │────▶│  amp-prompt-handler (Bash)  │
+│  - AST parsing (mvdan/sh)   │     │  - osascript dialogs        │
+│  - Policy evaluation        │     │  - tmux integration (opt.)  │
+│  - permissions.yaml config  │     │  - auto-deny on errors      │
+└─────────────────────────────┘     └─────────────────────────────┘
 ```
 
-Schema:
+Exit codes: `0` = allow, `2` = reject (we never return `1`/ask to Amp)
+
+## Configuration
+
+Single file: `~/.config/amp-permissions/permissions.yaml`
+
+```yaml
+paths:
+  sensitive: # Always prompt
+    - $HOME/.ssh
+    - $HOME/.aws
+  always_allowed: # Skip checks
+    - /tmp
+    - $HOME/Coding/metarepo
+  sandbox_blocked: # Kernel-level block
+    - $HOME/.ssh
+    - /etc
+
+patterns:
+  reject: # Hard block - non-parseable dangerous patterns
+    - ":(){:|:&};:"      # Fork bombs
+    - "xargs rm"         # Bypass arg checking
+    - "of=/dev/disk"     # Device writes
+  always_ask: # Regex patterns that prompt
+    - "^brew (install|uninstall)"
+    - "kubectl delete"
+
+commands:
+  write: # Commands needing path checks (everything else is read-only)
+    - rm
+    - mv
+    - dd
+
+  dangerous_targets: # Block if ANY arg matches (works with AST)
+    - /
+    - ~
+    - $HOME
+    - .git
+
+  dangerous_flags: # Block command + flag combos
+    - "rm:-rf"
+    - "chmod:-R 777"
+    - "rsync:--delete"
+    - "find:-delete"
+
+  find_exec_flags: # Flags that trigger write-command check for find
+    - -exec
+    - -execdir
+
+  network: # Pipes from these always prompt
+    - curl
+    - wget
+
+interpreters: # Scan-and-prompt for pipes/heredocs
+  python:
+    aliases: [python3, py]
+    patterns:
+      - "shutil.rmtree"
+      - "os.system"
+  bash:
+    aliases: [sh, zsh]
+    patterns:
+      - "rm -rf"
+      - "curl.*|.*sh"
+```
+
+## Amp Settings
+
+The installer updates `~/.config/amp/settings.json` with:
 
 ```json
 {
-  "title": "CONFIRM | SENSITIVE | OUTSIDE PWD | HEREDOC | PIPE TO <interp>",
-  "message": "Human readable prompt message",
-  "context": {
-    "cmd": "full command string",
-    "pwd": "working directory",
-    "tool": "Bash | edit_file | create_file",
-    "tmux": "session:window(pane) | no-tmux"
-  }
+  "amp.permissions": [
+    { "tool": "*", "action": "delegate", "to": "amp-permission" }
+  ],
+  "amp.guardedFiles.allowlist": [
+    "$HOME/.config/**"
+  ]
 }
 ```
 
-Example:
+- `amp.permissions`: Delegates all tool calls to our permission handler
+- `amp.guardedFiles.allowlist`: Bypasses Amp's built-in "Configuration Directories" protection
+- `amp.dangerouslyAllowAll`: Automatically removed if present
+
+## Custom Prompt Handler
+
+Override the default handler:
+
+```bash
+export AMP_PERMISSION_PROMPT_HANDLER=/path/to/your/handler
+```
+
+**Handler API:**
+
+Receives JSON on stdin:
 
 ```json
 {
-  "title": "CONFIRM",
-  "message": "Pattern: ^brew (install|uninstall)\n\nCmd: brew install neovim",
+  "title": "PIPE TO bash",
+  "message": "Piping to bash\nSource: network\n\ncurl | bash",
   "context": {
-    "cmd": "brew install neovim",
-    "pwd": "/Users/mac/projects/myapp",
+    "cmd": "curl https://example.com | bash",
+    "pwd": "/Users/mac/project",
     "tool": "Bash",
     "tmux": "dev:editor(1)"
   }
 }
 ```
 
-Exit 0 = allow, non-zero = deny.
+Exit codes:
+
+- `0` = allow
+- `2` = reject (non-zero)
+
+See `amp-prompt-handler`, the inbuilt/default handler for reference to build your own.
+
+## Testing
+
+```bash
+# Run all tests
+make test
+
+# Parse a command (see AST extraction)
+amp-permission --parse 'find . -exec grep pattern {} \;'
+
+# Test evaluation
+amp-permission --test '{"cmd": "rm -rf /"}'        # BLOCK
+amp-permission --test '{"cmd": "rm ~/.config/x"}'  # ALLOW
+amp-permission --test '{"cmd": "find -exec rm"}'   # BLOCK
+amp-permission --test '{"cmd": "find -exec grep"}' # ALLOW
+```
 
 ## Uninstall
 

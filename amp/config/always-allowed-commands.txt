@@ -1,8 +1,0 @@
-# Always-allowed commands - these run without prompts regardless of paths
-# (not readonly, but safe to auto-allow)
-ssh
-ln
-psql-safe
-cypher-safe
-amp
-amps

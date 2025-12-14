@@ -73,11 +73,14 @@ func run() error {
 	// Get user's var/folders base path (parent of TMPDIR)
 	varFoldersPath := filepath.Dir(filepath.Dir(canonicalTmpdir)) // e.g. /private/var/folders/xx/yyyyyyyy
 
-	// Build writable roots with .git protection
+	// Build writable roots
 	// Narrowed to amp-specific paths only
 	writableRoots := []WritableRoot{
-		{Root: canonicalPwd, ReadOnlySubpaths: findGitDirs(canonicalPwd)},
+		{Root: canonicalPwd, ReadOnlySubpaths: nil},
 		{Root: canonicalTmpdir, ReadOnlySubpaths: nil},
+		{Root: "/private/tmp", ReadOnlySubpaths: nil},
+		{Root: "/tmp", ReadOnlySubpaths: nil},
+		{Root: "/dev/null", ReadOnlySubpaths: nil},
 		{Root: cacheDir, ReadOnlySubpaths: nil},
 		{Root: filepath.Join(home, ".amp"), ReadOnlySubpaths: nil},
 		{Root: filepath.Join(home, ".config/amp"), ReadOnlySubpaths: nil},
@@ -130,14 +133,6 @@ func buildPolicy(roots []WritableRoot) string {
 
 	sb.WriteString(")\n")
 	return sb.String()
-}
-
-func findGitDirs(root string) []string {
-	gitDir := filepath.Join(root, ".git")
-	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
-		return []string{gitDir}
-	}
-	return nil
 }
 
 func findAmp() (string, error) {

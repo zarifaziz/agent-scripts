@@ -1,8 +1,0 @@
-# Always-allowed paths - operations here never prompt
-# Use $HOME for home directory
-/tmp
-/private/tmp
-/var/folders
-/dev/null
-/private/var/folders
-$HOME/Coding/metarepo
