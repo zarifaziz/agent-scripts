@@ -1,0 +1,679 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# shellcheck disable=SC2034,SC2155
+
+#######################################
+# CONFIGURATION
+#######################################
+
+# Colors
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[0;33m'
+readonly CYAN='\033[0;36m'
+readonly NC='\033[0m'
+
+NEO4J_PASSWORD="De0YFd4XG239RCoP"
+
+# Neo4j connection
+readonly NEO4J_NAMESPACE="learning"
+readonly NEO4J_POD="resources-neo4j-1-0"
+readonly NEO4J_CONTAINER="neo4j"
+readonly NEO4J_USER="neo4j"
+
+# CockroachDB connection
+readonly CRDB_NAMESPACE="schools"
+readonly CRDB_POD="teaching-cockroachdb-0"
+readonly CRDB_CERTS_DIR="/cockroach/cockroach-certs"
+
+# Firebase projects
+readonly FIREBASE_DEV="mathgaps-dev-b044f"
+readonly FIREBASE_PROD="mathgaps-56d5a"
+
+# Search defaults
+readonly DEFAULT_SEARCH_LIMIT=10
+readonly SEARCH_RESULTS_FILE="/tmp/resource_search_results.txt"
+
+# Null/empty markers for DB values
+readonly NULL_MARKER="::NA::"
+readonly EMPTY_MARKER="::EMPTY::"
+
+#######################################
+# FUNCTIONS
+#######################################
+
+usage() {
+    cat <<EOF
+resource-owner - Look up owner info and reverse engineer GraphQL input for resources
+
+USAGE:
+    resource-owner [OPTIONS] <resource-id-or-url>
+    resource-owner search [OPTIONS] <search-query>
+
+COMMANDS:
+    (default)         Look up resource by ID or URL
+    search            Search resources by name, context, etc.
+
+OPTIONS:
+    --env <ENV>       Environment: dev, staging, prod-us, prod (default: dev or auto-detect)
+    --owner-only      Only show owner info (skip GraphQL input)
+    --reverse-only    Only show GraphQL input (skip owner info)
+    -h, --help        Show this help
+
+SEARCH OPTIONS:
+    --env <ENV>       Single env (dev/staging/prod-us/prod), or omit to search dev+prod-us+prod
+    --limit <N>       Max results (default: ${DEFAULT_SEARCH_LIMIT})
+
+SEARCH QUERY FORMAT:
+    name:"Example Name"           Search by name
+    context:"Basketball"          Search by context
+
+EXAMPLES:
+    resource-owner lp_01KBHKAFM98XH57EJRQDJZX05F
+    resource-owner --owner-only lp_xxx
+    resource-owner search 'name:"Mass & Length"'
+    resource-owner search --env dev --limit 5 'name:"Test"'
+EOF
+}
+
+get_kubectl_context() {
+    local env="$1"
+    case "$env" in
+    dev) echo "dev" ;;
+    staging) echo "staging" ;;
+    prod-us) echo "prod-us" ;;
+    prod | *) echo "prod" ;;
+    esac
+}
+
+get_firebase_project() {
+    local env="$1"
+    case "$env" in
+    dev) echo "$FIREBASE_DEV" ;;
+    *) echo "$FIREBASE_PROD" ;;
+    esac
+}
+
+neo4j_query() {
+    local env="$1"
+    local query="$2"
+    local ctx
+    ctx=$(get_kubectl_context "$env")
+
+    kubectl --context="$ctx" exec -n "$NEO4J_NAMESPACE" "$NEO4J_POD" -c "$NEO4J_CONTAINER" -- \
+        cypher-shell -u "$NEO4J_USER" -p "$NEO4J_PASSWORD" --format plain "$query" 2>/dev/null
+}
+
+cockroach_query() {
+    local env="$1"
+    local query="$2"
+    local ctx
+    ctx=$(get_kubectl_context "$env")
+
+    kubectl --context="$ctx" exec -n "$CRDB_NAMESPACE" "$CRDB_POD" -- \
+        cockroach sql --certs-dir="$CRDB_CERTS_DIR" --format=csv --execute "$query" 2>/dev/null
+}
+
+firebase_get_email() {
+    local env="$1"
+    local uid="$2"
+    local project token
+    project=$(get_firebase_project "$env")
+    token=$(gcloud auth print-access-token --project="$project" 2>/dev/null)
+
+    curl -s -X POST \
+        "https://identitytoolkit.googleapis.com/v1/projects/${project}/accounts:lookup" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        -H "x-goog-user-project: $project" \
+        -d "{\"localId\":[\"$uid\"]}" | jq -r '.users[0].email // empty'
+}
+
+display_value() {
+    local val="$1"
+    case "$val" in
+    "$NULL_MARKER") echo -e "${YELLOW}<null>${NC}" ;;
+    "$EMPTY_MARKER") echo -e "${YELLOW}<empty>${NC}" ;;
+    *) echo "$val" ;;
+    esac
+}
+
+format_date() {
+    local iso_date="$1"
+    [[ -z "$iso_date" || "$iso_date" == "$NULL_MARKER" || "$iso_date" == "$EMPTY_MARKER" ]] && return
+
+    # Parse date - macOS compatible
+    local ts now diff
+    ts=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${iso_date%%.*}" "+%s" 2>/dev/null || echo "")
+    [[ -z "$ts" ]] && echo "$iso_date" && return
+
+    now=$(date +%s)
+    diff=$((now - ts))
+
+    # Format: "9:33 am 9th Dec 25"
+    local time_str day month year suffix relative
+    time_str=$(date -j -f "%s" "$ts" "+%-l:%M %p" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    day=$(date -j -f "%s" "$ts" "+%-d" 2>/dev/null)
+    month=$(date -j -f "%s" "$ts" "+%b" 2>/dev/null)
+    year=$(date -j -f "%s" "$ts" "+%y" 2>/dev/null)
+
+    # Ordinal suffix
+    suffix="th"
+    case "$day" in
+    1 | 21 | 31) suffix="st" ;;
+    2 | 22) suffix="nd" ;;
+    3 | 23) suffix="rd" ;;
+    esac
+
+    # Relative time
+    relative=""
+    if [[ $diff -lt 60 ]]; then
+        relative="just now"
+    elif [[ $diff -lt 3600 ]]; then
+        relative="$((diff / 60)) mins ago"
+    elif [[ $diff -lt 86400 ]]; then
+        relative="$((diff / 3600)) hours ago"
+    elif [[ $diff -lt 172800 ]]; then
+        relative="yesterday"
+    elif [[ $diff -lt 604800 ]]; then
+        relative="$((diff / 86400)) days ago"
+    elif [[ $diff -lt 2592000 ]]; then
+        relative="$((diff / 604800)) weeks ago"
+    elif [[ $diff -lt 31536000 ]]; then
+        relative="$((diff / 2592000)) months ago"
+    else
+        relative="$((diff / 31536000)) years ago"
+    fi
+
+    echo "${time_str} ${day}${suffix} ${month} ${year} -- ${relative}"
+}
+
+search_env() {
+    local env="$1"
+    local query="$2"
+    local limit="$3"
+
+    # Use | as delimiter to avoid comma issues in names
+    # Use ::NA:: for null, ::EMPTY:: for empty string to distinguish DB state
+    local cypher="
+MATCH (r:Resource)
+WHERE ${query}
+WITH r,
+     CASE WHEN r:WorksheetPlan THEN 'worksheet' WHEN r:LessonPlan THEN 'lesson' ELSE labels(r)[0] END as type,
+     CASE WHEN r.lastViewedAt IS NULL THEN '::NA::' WHEN r.lastViewedAt = '' THEN '::EMPTY::' ELSE toString(r.lastViewedAt) END as lastViewed,
+     CASE WHEN r.updatedAt IS NULL THEN '::NA::' WHEN r.updatedAt = '' THEN '::EMPTY::' ELSE toString(r.updatedAt) END as updated,
+     CASE WHEN r.createdAt IS NULL THEN '::NA::' WHEN r.createdAt = '' THEN '::EMPTY::' ELSE toString(r.createdAt) END as created,
+     CASE WHEN r.name IS NULL THEN '::NA::' WHEN r.name = '' THEN '::EMPTY::' ELSE r.name END as name,
+     CASE WHEN r.context IS NULL THEN '::NA::' WHEN r.context = '' THEN '::EMPTY::' ELSE r.context END as context
+ORDER BY 
+    CASE WHEN r.lastViewedAt IS NOT NULL THEN datetime(r.lastViewedAt) ELSE datetime('1970-01-01') END DESC,
+    CASE WHEN r.updatedAt IS NOT NULL THEN datetime(r.updatedAt) ELSE datetime('1970-01-01') END DESC,
+    CASE WHEN r.createdAt IS NOT NULL THEN datetime(r.createdAt) ELSE datetime('1970-01-01') END DESC
+LIMIT ${limit}
+RETURN r.id + '|' + name + '|' + type + '|' + context + '|' + lastViewed + '|' + updated + '|' + created
+"
+
+    local result id name type context lastViewed updated created
+    result=$(neo4j_query "$env" "$cypher" 2>/dev/null | tail -n +2) || true
+
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        line=$(echo "$line" | tr -d '"')
+
+        id=$(echo "$line" | cut -d'|' -f1)
+        name=$(echo "$line" | cut -d'|' -f2)
+        type=$(echo "$line" | cut -d'|' -f3)
+        context=$(echo "$line" | cut -d'|' -f4)
+        lastViewed=$(echo "$line" | cut -d'|' -f5)
+        updated=$(echo "$line" | cut -d'|' -f6)
+        created=$(echo "$line" | cut -d'|' -f7)
+
+        [[ -z "$id" ]] && continue
+        echo -e "${env}\t${id}\t${name}\t${type}\t${context}\t${lastViewed}\t${updated}\t${created}"
+    done <<<"$result"
+}
+
+do_search() {
+    local env=""
+    local limit=$DEFAULT_SEARCH_LIMIT
+    local query_parts=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+        --env)
+            env="$2"
+            shift 2
+            ;;
+        --limit)
+            limit="$2"
+            shift 2
+            ;;
+        *)
+            query_parts+=("$1")
+            shift
+            ;;
+        esac
+    done
+
+    local search_str="${query_parts[*]}"
+    [[ -z "$search_str" ]] && {
+        echo "Error: No search query provided" >&2
+        exit 1
+    }
+
+    # Parse search query: name:"value" -> toLower(r.name) CONTAINS toLower('value')
+    local where_clauses="r:Resource" key val
+    while [[ "$search_str" =~ ([a-zA-Z]+):\"([^\"]+)\" ]]; do
+        key="${BASH_REMATCH[1]}"
+        val="${BASH_REMATCH[2]}"
+        where_clauses="${where_clauses} AND toLower(r.${key}) CONTAINS toLower('${val}')"
+        search_str="${search_str/${BASH_REMATCH[0]}/}"
+    done
+
+    local envs_to_search=()
+
+    if [[ -n "$env" ]]; then
+        envs_to_search=("$env")
+        echo -e "${CYAN}Searching: ${search_str} (env=${env}, limit=${limit})${NC}" >&2
+    else
+        envs_to_search=("dev" "prod-us" "prod")
+        echo -e "${CYAN}Searching: ${search_str} (envs=${envs_to_search[*]}, limit=${limit})${NC}" >&2
+    fi
+
+    # Search in parallel, then aggregate to final limit
+    for e in "${envs_to_search[@]}"; do
+        search_env "$e" "$where_clauses" "$limit" &
+    done | sort -t$'\t' -k6,6r -k7,7r -k8,8r | head -n "$limit" >"$SEARCH_RESULTS_FILE"
+    wait
+
+    local count i env id name type context lastViewed updated created
+    count=$(wc -l <"$SEARCH_RESULTS_FILE" | tr -d ' ')
+
+    if [[ "$count" -eq 0 ]]; then
+        echo -e "${YELLOW}No results found${NC}" >&2
+        return
+    fi
+
+    echo -e "\n${GREEN}Found ${count} results:${NC}\n"
+
+    i=1
+    while IFS= read -r line; do
+        env=$(echo "$line" | cut -f1)
+        id=$(echo "$line" | cut -f2)
+        name=$(echo "$line" | cut -f3)
+        type=$(echo "$line" | cut -f4)
+        context=$(echo "$line" | cut -f5)
+        lastViewed=$(echo "$line" | cut -f6)
+        updated=$(echo "$line" | cut -f7)
+        created=$(echo "$line" | cut -f8)
+
+        echo -e "${CYAN}${i}. [${env}] ${id}${NC}"
+        echo -e "   Name: $(display_value "$name")"
+        echo -e "   Type: ${type}"
+        [[ "$context" != "$NULL_MARKER" && "$context" != "$EMPTY_MARKER" ]] && echo -e "   Context: ${context}"
+        [[ "$context" == "$EMPTY_MARKER" ]] && echo -e "   Context: ${YELLOW}<empty>${NC}"
+        [[ "$lastViewed" != "$NULL_MARKER" && "$lastViewed" != "$EMPTY_MARKER" ]] && echo -e "   Last Viewed: ${lastViewed} ($(format_date "$lastViewed"))"
+        [[ "$lastViewed" == "$NULL_MARKER" ]] && echo -e "   Last Viewed: ${YELLOW}<null>${NC}"
+        [[ "$updated" != "$NULL_MARKER" && "$updated" != "$EMPTY_MARKER" ]] && echo -e "   Updated: ${updated} ($(format_date "$updated"))"
+        [[ "$updated" == "$NULL_MARKER" ]] && echo -e "   Updated: ${YELLOW}<null>${NC}"
+        [[ "$created" != "$NULL_MARKER" && "$created" != "$EMPTY_MARKER" ]] && echo -e "   Created: ${created} ($(format_date "$created"))"
+        [[ "$created" == "$NULL_MARKER" ]] && echo -e "   Created: ${YELLOW}<null>${NC}"
+        echo
+        ((i++))
+    done <"$SEARCH_RESULTS_FILE"
+
+    # Check for LP/WP results
+    local lp_wp_count sel_env sel_id sel_type selection
+    lp_wp_count=$(grep -cE $'\t(lesson|worksheet)\t' "$SEARCH_RESULTS_FILE" || echo 0)
+
+    if [[ "$lp_wp_count" -eq 1 ]]; then
+        echo -e "${GREEN}Single LP/WP result, auto-invoking lookup...${NC}" >&2
+        line=$(grep -E $'\t(lesson|worksheet)\t' "$SEARCH_RESULTS_FILE" | head -1)
+        sel_env=$(echo "$line" | cut -f1)
+        sel_id=$(echo "$line" | cut -f2)
+        sel_type=$(echo "$line" | cut -f4)
+        do_lookup "$sel_id" --env "$sel_env" --type "$sel_type"
+        return
+    fi
+
+    if [[ "$lp_wp_count" -gt 1 ]] && [[ -t 0 ]]; then
+        echo -n "Enter result number (1-${count}) to lookup, or press Enter to skip: "
+        read -r selection
+
+        if [[ -n "$selection" ]] && [[ "$selection" =~ ^[0-9]+$ ]]; then
+            line=$(sed -n "${selection}p" "$SEARCH_RESULTS_FILE")
+            if [[ -n "$line" ]]; then
+                sel_env=$(echo "$line" | cut -f1)
+                sel_id=$(echo "$line" | cut -f2)
+                sel_type=$(echo "$line" | cut -f4)
+                echo -e "\n${GREEN}Selected: ${sel_id} (${sel_env}, ${sel_type})${NC}" >&2
+                do_lookup "$sel_id" --env "$sel_env" --type "$sel_type"
+            fi
+        fi
+    fi
+}
+
+do_lookup() {
+    local resource_id=""
+    local env="dev"
+    local type=""
+    local owner_only=false
+    local reverse_only=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+        --env)
+            env="$2"
+            shift 2
+            ;;
+        --type)
+            type="$2"
+            shift 2
+            ;;
+        --owner-only)
+            owner_only=true
+            shift
+            ;;
+        --reverse-only)
+            reverse_only=true
+            shift
+            ;;
+        *)
+            resource_id="$1"
+            shift
+            ;;
+        esac
+    done
+
+    [[ -z "$resource_id" ]] && {
+        echo "Error: No resource ID provided" >&2
+        exit 1
+    }
+
+    # Extract ID from URL if needed
+    if [[ "$resource_id" == *"tutero"* ]]; then
+        [[ "$resource_id" == *".tutero.com"* ]] && env="prod"
+        [[ "$resource_id" == *"tutero-staging.dev"* ]] && env="staging"
+        [[ "$resource_id" == *".tutero.dev"* && "$resource_id" != *"tutero-staging.dev"* ]] && env="dev"
+        resource_id=$(echo "$resource_id" | grep -oE '(lp_|wp_)[a-zA-Z0-9]+' | head -1)
+    fi
+
+    echo -e "${CYAN}Looking up: ${resource_id} (env=${env})${NC}" >&2
+
+    # Detect type and get name if not already provided
+    local name="" detect_result
+    if [[ -z "$type" ]]; then
+        detect_result=$(neo4j_query "$env" "MATCH (n {id: '${resource_id}'}) RETURN labels(n), n.name" | tail -1)
+
+        if [[ "$detect_result" == *"WorksheetPlan"* ]]; then
+            type="worksheet"
+        elif [[ "$detect_result" == *"LessonPlan"* ]]; then
+            type="lesson"
+        else
+            type="unknown"
+        fi
+
+        name=$(echo "$detect_result" | grep -oE '"[^"]*"$' | tr -d '"')
+    fi
+
+    echo -e "  Type: ${type}"
+    [[ -n "$name" ]] && echo -e "  Name: ${name}"
+
+    if [[ "$type" != "lesson" && "$type" != "worksheet" ]]; then
+        echo -e "${YELLOW}  Not a LessonPlan/WorksheetPlan, skipping full lookup${NC}" >&2
+        return
+    fi
+
+    # Get owner info
+    if [[ "$reverse_only" != true ]]; then
+        local label="LessonPlan" owner_result class_id owner_id root_user lookup_uid email
+        [[ "$type" == "worksheet" ]] && label="WorksheetPlan"
+
+        owner_result=$(neo4j_query "$env" "
+MATCH (creator)-[:CREATED]->(r:${label} {id: '${resource_id}'})
+OPTIONAL MATCH (owner)-[:OWNS]->(r)
+RETURN creator.id, owner.id
+" | tail -1)
+
+        class_id=$(echo "$owner_result" | cut -d',' -f1 | tr -d '" ')
+        owner_id=$(echo "$owner_result" | cut -d',' -f2 | tr -d '" ')
+        [[ "$owner_id" == "null" || "$owner_id" == "NULL" ]] && owner_id=""
+
+        echo -e "  Class ID: ${class_id}"
+        echo -e "  Owner ID: ${owner_id:-<none>}"
+
+        # Get root user from CockroachDB
+        if [[ -n "$class_id" ]]; then
+            root_user=$(cockroach_query "$env" "
+SELECT t.id FROM classes c
+JOIN workspace_users wu ON wu.workspace_id = c.workspace_id AND wu.workspace_role = 'ADMIN'
+JOIN teachers t ON t.id = wu.teacher_id
+WHERE c.id = '${class_id}' AND c.deleted_at IS NULL AND wu.deleted_at IS NULL AND t.deleted_at IS NULL
+LIMIT 1
+" | tail -1)
+            echo -e "  Root User: ${root_user}"
+
+            # Get email from Firebase
+            lookup_uid="${owner_id:-$root_user}"
+            if [[ -n "$lookup_uid" ]]; then
+                email=$(firebase_get_email "$env" "$lookup_uid")
+                echo -e "  Email: ${email:-<not found>}"
+            fi
+        fi
+    fi
+
+    # Get GraphQL input
+    if [[ "$owner_only" != true ]]; then
+        echo -e "\n${CYAN}Reversing GraphQL input...${NC}" >&2
+
+        local cypher
+        if [[ "$type" == "worksheet" ]]; then
+            # Worksheet plan query with nodeCounts
+            cypher="
+MATCH (lp:WorksheetPlan {id: '${resource_id}'})
+OPTIONAL MATCH (lp)-[:FOR]->(st:Subtopic)
+OPTIONAL MATCH (lp)<-[:FOR]-(wc:WorksheetPlanConfiguration)
+OPTIONAL MATCH (u:User)-[:CREATED]->(lp)
+
+CALL {
+    WITH lp
+    OPTIONAL MATCH (lp)-[:PLANS]->(:Lesson)-[:CONTAINS]->(ss:SkillSection)-[:HAS]->(skill:Skill)
+    WHERE ss.enabled = true OR ss.enabled IS NULL
+    RETURN collect(DISTINCT skill.id) AS skillIDs
+}
+
+CALL {
+    WITH lp
+    OPTIONAL MATCH (lp)-[:PLANS]->(:Lesson)-[:CONTAINS]->(:LessonSection)-[:INCLUDES]->(lpn:LessonPlanNode)
+    WHERE lpn.enabled = true OR lpn.enabled IS NULL
+    RETURN collect(DISTINCT lpn.type) AS includeNodes
+}
+
+CALL {
+    WITH lp
+    OPTIONAL MATCH (lp)-[:PLANS]->(l:Lesson)-[:CONTAINS]->(ls:LessonSection)-[:INCLUDES]->(lpn:LessonPlanNode)
+    WHERE (lpn.enabled = true OR lpn.enabled IS NULL) AND (ls.enabled = true OR ls.enabled IS NULL)
+
+    OPTIONAL MATCH (lpn:StudentQuestionsNode)-[qi:INCLUDES]->(q:Question)
+
+    WITH lpn, CASE
+        WHEN lpn.type = 'SCAFFOLDED_QUESTION' THEN 'SCAFFOLDED'
+        WHEN lpn.type = 'STUDENT_QUESTIONS' THEN qi.type
+        WHEN lpn.type = 'MULTIPLE_CHOICE_QUESTION' THEN 'MULTIPLE_CHOICE'
+        WHEN lpn.type = 'SHORT_ANSWER_QUESTION' THEN 'SHORT_ANSWER'
+        WHEN lpn.type = 'CONTEMPLATIVE_QUESTION' THEN 'OPEN_ENDED'
+        ELSE null
+    END AS qType,
+    lpn.type AS nodeType
+    WHERE lpn IS NOT NULL AND qType IS NOT NULL
+
+    WITH nodeType, qType, count(*) AS cnt
+
+    WITH CASE
+        WHEN nodeType = 'SCAFFOLDED_QUESTION' THEN {nodeType: 'SCAFFOLDED_QUESTION', count: cnt}
+        WHEN qType = 'MULTIPLE_CHOICE' THEN {questionType: 'MULTI', count: cnt}
+        WHEN qType = 'SHORT_ANSWER' THEN {questionType: 'SHORT', count: cnt}
+        WHEN qType = 'OPEN_ENDED' THEN {questionType: 'OPEN_ENDED', count: cnt}
+        ELSE null
+    END AS nodeCount
+    WHERE nodeCount IS NOT NULL
+
+    WITH nodeCount.nodeType AS nt, nodeCount.questionType AS qt, sum(nodeCount.count) AS total
+    WITH collect(
+        CASE
+            WHEN nt IS NOT NULL THEN {nodeType: nt, count: total}
+            ELSE {questionType: qt, count: total}
+        END
+    ) AS nodeCounts
+
+    WITH nodeCounts, reduce(sum = 0, nc IN nodeCounts | sum + nc.count) AS questionCount
+    RETURN nodeCounts, questionCount
+}
+
+RETURN {
+    input: {
+        name: lp.name,
+        subtopicID: st.id,
+        context: coalesce(lp.context, ''),
+        skillIDs: skillIDs,
+        includeNodes: [n IN includeNodes WHERE n IS NOT NULL AND n <> ''],
+        configuration: {
+            type: coalesce(wc.type, 'STANDARD'),
+            questionCount: questionCount,
+            averageQuestionDifficulty: coalesce(wc.averageQuestionDifficulty, -1),
+            minDifficulty: coalesce(wc.minDifficulty, 0),
+            maxDifficulty: coalesce(wc.maxDifficulty, 4),
+            workingOutSpaceEnabled: coalesce(wc.workingOutSpaceEnabled, true),
+            reducePaperEnabled: coalesce(wc.reducePaperEnabled, true),
+            nodeCounts: nodeCounts
+        }
+    },
+    classId: u.id
+} AS creationParams
+"
+        else
+            # Lesson Plan V3 query with full structure
+            cypher="
+MATCH (lp:LessonPlan {id: '${resource_id}'})
+
+CALL {
+    WITH lp
+    OPTIONAL MATCH (lp)<-[:CREATED]-(u:User)
+    RETURN u.id AS classId
+}
+
+CALL {
+    WITH lp
+    OPTIONAL MATCH (lp)-[:FOR]->(st:Subtopic)
+    RETURN st.id AS subtopicID
+}
+
+CALL {
+    WITH lp
+    MATCH (lp)-[plansRel:PLANS]->(lesson:Lesson)
+    WITH lesson, plansRel
+    ORDER BY plansRel.index
+    
+    CALL {
+        WITH lesson
+        
+        CALL {
+            WITH lesson
+            OPTIONAL MATCH (lesson)-[:CONTAINS]->(is:IntroductionSection)-[ir:INCLUDES]->(iNode:LessonPlanNode)
+            WHERE iNode.enabled = true
+            WITH iNode, ir
+            ORDER BY ir.index
+            RETURN collect({type: iNode.type}) AS introductionNodes
+        }
+        
+        CALL {
+            WITH lesson
+            OPTIONAL MATCH (lesson)-[cr:CONTAINS]->(ss:SkillSection)-[:HAS]->(skill:Skill)
+            WITH ss, skill, cr
+            ORDER BY cr.index
+            
+            CALL {
+                WITH ss
+                OPTIONAL MATCH (ss)-[nr:INCLUDES]->(sNode:LessonPlanNode)
+                WHERE sNode.enabled = true
+                WITH sNode, nr
+                ORDER BY nr.index
+                
+                WITH CASE 
+                    WHEN sNode.type = 'SKILL_SLIDE' THEN {
+                        type: sNode.type,
+                        title: sNode.title,
+                        templateConfig: CASE 
+                            WHEN sNode.skillTemplateIDs IS NOT NULL AND sNode.generalTemplateIDs IS NOT NULL 
+                            THEN {
+                                skillTemplateID: sNode.skillTemplateIDs[0],
+                                generalTemplateID: sNode.generalTemplateIDs[0]
+                            }
+                            ELSE null
+                        END
+                    }
+                    ELSE {
+                        type: sNode.type
+                    }
+                END AS nodeObj
+                
+                RETURN collect(nodeObj) AS skillNodes
+            }
+            
+            RETURN collect({
+                skillID: skill.id,
+                nodes: skillNodes
+            }) AS skillSections
+        }
+        
+        CALL {
+            WITH lesson
+            OPTIONAL MATCH (lesson)-[:CONTAINS]->(ps:PracticeSection)-[pr:INCLUDES]->(pNode:LessonPlanNode)
+            WHERE pNode.enabled = true
+            WITH pNode, pr
+            ORDER BY pr.index
+            RETURN collect({type: pNode.type}) AS practiceNodes
+        }
+        
+        RETURN {
+            duration: lesson.duration,
+            introductionNodes: introductionNodes,
+            skillSections: skillSections,
+            practiceNodes: practiceNodes
+        } AS lessonObj
+    }
+    
+    RETURN collect(lessonObj) AS lessons
+}
+
+RETURN {
+    classId: classId,
+    input: {
+        name: coalesce(lp.name, ''),
+        context: coalesce(lp.context, ''),
+        subtopicID: subtopicID,
+        lessonType: 'STANDARD',
+        lessons: lessons
+    }
+} AS reconstructedInput
+"
+        fi
+
+        echo -e "\n${GREEN}GraphQL Input:${NC}"
+        neo4j_query "$env" "$cypher" | tail -n +2 | sed 's/NULL/null/g; s/TRUE/true/g; s/FALSE/false/g' | sed -E 's/([{,\[]) *([a-zA-Z_][a-zA-Z0-9_]*) *:/\1"\2":/g' | jq .
+    fi
+}
+
+# Main
+case "${1:-}" in
+-h | --help)
+    usage
+    exit 0
+    ;;
+search)
+    shift
+    do_search "$@"
+    ;;
+*) do_lookup "$@" ;;
+esac
