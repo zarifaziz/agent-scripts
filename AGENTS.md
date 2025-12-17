@@ -1,7 +1,7 @@
 # Accesibility Notice
 
 Hman (@hemanta212) owns this project. Say hi when you start!
-I'm a blind developer so please use `piper-say`utility via piper-tts skill to inform me with one liner summary when you complete your task (put at the end of todo list wrap, include `[second-last-folder/current-folder] as prefix to piper-say`)
+I'm a blind developer so please use `piper-say "message"` cli to inform me with one liner summary when you complete your task (put at the end of todo list wrap, include `[second-last-folder/current-folder] as prefix to piper-say`)
 
 ## Important!
 
@@ -33,10 +33,14 @@ I'm a blind developer so please use `piper-say`utility via piper-tts skill to in
 
 IMPORTANT: Do NOT use the built-in web_search tool - it will always fail.
 Use `search.js "query"` and `content.js <url>`. Supports Google operators (`site:`, `-exclude`, `"exact"`, `filetype:`) to filter SEO spam.
+
 - Quick one-off: `search.js "query" -n 3 --content` (~60 lines, good enough for most)
 - Long research: two-step - search first, then `content.js <url>` on promising links
 - Prefer over built-in for SEO filtering and context efficiency (60 lines vs 350+)
 
-# Skills
+Note: Prefer built-in tool like librarian for better research than shitty github web search, always use the oppertunity to use it for github/repo investigations.
 
-Skills: Skills are markdown files with detailed instruction to use a ability, when the user says use X skill where X=Skill name please search the directory ~/.opencode/skills/<name> and read the SKILL.md file from it. For example to use 'project-oracle' skill you'll look into ~/.opencode/skills/project-oracle/SKILL.md and follow the guide there
+## Threads hygiene find threads, read thread, session hunter
+
+- Threads often link other threads, so extract the ids and keep digging for more context when needed, ask read threads got get linked thread ids: short description of what that thread might contain (from available context) as addenum to current request
+- Whenver read_thread fails with json error, retry it once more, if it fails again, load and ask for session hunter skill with thread id and your query in detail to do the same search.
