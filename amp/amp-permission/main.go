@@ -68,6 +68,7 @@ type CommandsConfig struct {
 	DangerousFlags   []string `yaml:"dangerous_flags"`
 	FindExecFlags    []string `yaml:"find_exec_flags"`
 	Network          []string `yaml:"network"`
+	NonDestructive   []string `yaml:"non_destructive"`
 }
 
 type InterpreterConfig struct {
@@ -89,18 +90,19 @@ type ScriptScanConfig struct {
 
 // Runtime state
 var (
-	config            Config
-	writeCommands     map[string]bool
-	dangerousTargets  map[string]bool
-	dangerousFlags    map[string][]string // cmd -> list of dangerous flag patterns
-	findExecFlags     map[string]bool
-	networkCommands   map[string]bool
-	interpreterMap    map[string]*InterpreterConfig
-	alwaysAskRegexps  []*regexp.Regexp
-	workDir           string
-	toolName          string
-	tmuxContext       string
-	currentCmd        string // Current command being evaluated (for prompt context)
+	config              Config
+	writeCommands       map[string]bool
+	dangerousTargets    map[string]bool
+	dangerousFlags      map[string][]string // cmd -> list of dangerous flag patterns
+	findExecFlags       map[string]bool
+	networkCommands     map[string]bool
+	nonDestructiveCmds  map[string]bool
+	interpreterMap      map[string]*InterpreterConfig
+	alwaysAskRegexps    []*regexp.Regexp
+	workDir             string
+	toolName            string
+	tmuxContext         string
+	currentCmd          string // Current command being evaluated (for prompt context)
 )
 
 func main() {
@@ -206,6 +208,11 @@ func loadConfig() {
 		networkCommands[cmd] = true
 	}
 
+	nonDestructiveCmds = make(map[string]bool)
+	for _, cmd := range config.Commands.NonDestructive {
+		nonDestructiveCmds[cmd] = true
+	}
+
 	interpreterMap = make(map[string]*InterpreterConfig)
 	for name, cfg := range config.Interpreters {
 		cfgCopy := cfg
@@ -236,6 +243,7 @@ func setDefaults() {
 	dangerousFlags = make(map[string][]string)
 	findExecFlags = make(map[string]bool)
 	networkCommands = make(map[string]bool)
+	nonDestructiveCmds = make(map[string]bool)
 	interpreterMap = make(map[string]*InterpreterConfig)
 }
 
@@ -397,7 +405,13 @@ func handleBash(args map[string]interface{}) {
 		}
 	}
 
-	// 9. Check paths against PWD
+	// 9. Skip PWD check for non-destructive commands (cp, ln, touch, etc.)
+	if isNonDestructive(result) {
+		logDecision("ALLOW", "Bash", "non-destructive command")
+		os.Exit(ExitAllow)
+	}
+
+	// 10. Check paths against PWD
 	var outsidePaths []string
 	for _, p := range allPaths {
 		resolved := resolvePath(p)
@@ -565,6 +579,15 @@ func gatherAllPaths(result *ParseResult) []string {
 func isReadOnly(result *ParseResult) bool {
 	for _, cmd := range result.Commands {
 		if writeCommands[cmd.Name] {
+			return false
+		}
+	}
+	return true
+}
+
+func isNonDestructive(result *ParseResult) bool {
+	for _, cmd := range result.Commands {
+		if writeCommands[cmd.Name] && !nonDestructiveCmds[cmd.Name] {
 			return false
 		}
 	}

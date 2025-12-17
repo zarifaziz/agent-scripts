@@ -1,0 +1,19 @@
+{
+  "amp.url": "http://localhost:8317",
+  "amp.tools.stopTimeout": 1000,
+  "amp.experimental.planMode": true,
+  "amp.notifications.enabled": true,
+  "amp.notifications.system.enabled": true,
+  "amp.git.commit.coauthor.enabled": true,
+  "amp.git.commit.ampThread.enabled": true,
+  "amp.permissions": [
+    {
+      "tool": "*",
+      "action": "delegate",
+      "to": "amp-permission"
+    }
+  ],
+  "amp.guardedFiles.allowlist": [
+    "/Users/mac/.config/**"
+  ]
+}

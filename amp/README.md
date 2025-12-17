@@ -223,3 +223,9 @@ amp-permission --test '{"cmd": "find -exec grep"}' # ALLOW
 ```bash
 make uninstall
 ```
+
+## Inspiration
+- Brilliant amp docs/permission system and this famous fckup
+
+  
+<img width="465" height="720" alt="image" src="https://github.com/user-attachments/assets/157dfe08-b24e-48a6-9f4f-c9c04694354e" />

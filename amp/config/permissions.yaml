@@ -266,6 +266,16 @@ commands:
     - http
     - https
 
+  # Non-destructive write commands - skip "outside PWD" check
+  # These create/copy but don't delete, so less risky
+  non_destructive:
+    - cp
+    - scp
+    - ln
+    - touch
+    - mkdir
+    - tee
+
 # Interpreters with their dangerous patterns for scan-and-prompt
 interpreters:
   bash:
