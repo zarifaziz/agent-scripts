@@ -105,6 +105,8 @@ patterns:
     - "^git branch -[dD]"
     - "^git push.*--force"
     - "^git push.*-f"
+    - "^git push.*(main|master)"
+    - "^git push origin (main|master)"
     - "^git rebase"
     - "^git submodule deinit"
     - "^git worktree remove"

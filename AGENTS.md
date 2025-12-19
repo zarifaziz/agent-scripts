@@ -1,7 +1,6 @@
 # Accesibility Notice
 
-Hman (@hemanta212) owns this project. Say hi when you start!
-I'm a blind developer so please use `piper-say`utility via piper-tts skill to inform me with one liner summary when you complete your task (put at the end of todo list wrap, include `[second-last-folder/current-folder] as prefix to piper-say`)
+Zarif (@zarifaziz) owns this project. Say hi when you start!
 
 ## Important!
 
@@ -12,7 +11,7 @@ I'm a blind developer so please use `piper-say`utility via piper-tts skill to in
 
 ## Agent Protocol
 
-- When working in a project which is under ~/Coding/metarepo/ root, you can use other folders under ~/Coding/metarepo/ to find dependencies/infrastructure i.e the whole stack for reference/lookup/research.
+- When working in a project which is under ~/workspace/metarepo/ root, you can use other folders under ~/workspace/metarepo/ to find dependencies/infrastructure i.e the whole stack for reference/lookup/research.
 - PR links: use gh pr view/diff instead of pasting URLs.
 - Add notes to AGENTS only when the user says “make a note”; edit AGENTS.MD (ignore CLAUDE.md symlink).
 - Need an upstream file? Redirect to /tmp/, then cherry-pick—never overwrite tracked files.
@@ -33,6 +32,7 @@ I'm a blind developer so please use `piper-say`utility via piper-tts skill to in
 
 IMPORTANT: Do NOT use the built-in web_search tool - it will always fail.
 Use `search.js "query"` and `content.js <url>`. Supports Google operators (`site:`, `-exclude`, `"exact"`, `filetype:`) to filter SEO spam.
+
 - Quick one-off: `search.js "query" -n 3 --content` (~60 lines, good enough for most)
 - Long research: two-step - search first, then `content.js <url>` on promising links
 - Prefer over built-in for SEO filtering and context efficiency (60 lines vs 350+)
