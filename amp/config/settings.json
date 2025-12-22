@@ -1,19 +1,13 @@
 {
-  "amp.url": "http://localhost:8317",
-  "amp.tools.stopTimeout": 1000,
+  "amp.url": "http://localhost:8318",
   "amp.experimental.planMode": true,
+  "amp.git.commit.ampThread.enabled": true,
+  "amp.git.commit.coauthor.enabled": true,
+  "amp.guardedFiles.allowlist": ["/Users/mac/.config/**"],
   "amp.notifications.enabled": true,
   "amp.notifications.system.enabled": true,
-  "amp.git.commit.coauthor.enabled": true,
-  "amp.git.commit.ampThread.enabled": true,
   "amp.permissions": [
-    {
-      "tool": "*",
-      "action": "delegate",
-      "to": "amp-permission"
-    }
+    { "action": "delegate", "to": "amp-permission", "tool": "*" }
   ],
-  "amp.guardedFiles.allowlist": [
-    "/Users/mac/.config/**"
-  ]
+  "amp.tools.stopTimeout": 1000
 }
