@@ -280,7 +280,7 @@ func handleBash(args map[string]interface{}) {
 	for _, pattern := range config.Patterns.Reject {
 		if strings.Contains(cmd, pattern) {
 			logDecision("BLOCK", "Bash", fmt.Sprintf("reject pattern: %s", pattern))
-			fmt.Fprintf(os.Stderr, "BLOCKED: matches reject pattern: %s\n", pattern)
+			// No stderr - just exit with reject code so Amp handles it properly
 			os.Exit(ExitReject)
 		}
 	}
