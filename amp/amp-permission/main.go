@@ -280,7 +280,7 @@ func handleBash(args map[string]interface{}) {
 	for _, pattern := range config.Patterns.Reject {
 		if strings.Contains(cmd, pattern) {
 			logDecision("BLOCK", "Bash", fmt.Sprintf("reject pattern: %s", pattern))
-			// No stderr - just exit with reject code so Amp handles it properly
+			sendAutoBlockNotification(pattern)
 			os.Exit(ExitReject)
 		}
 	}
@@ -823,6 +823,12 @@ func sendTimeoutNotification(title string) {
 	notifTitle := fmt.Sprintf("Amp Permission [%s]", tmuxContext)
 	exec.Command("osascript", "-e",
 		fmt.Sprintf(`display notification "Timed out - auto denied" with title "%s" sound name "Basso"`, notifTitle)).Run()
+}
+
+func sendAutoBlockNotification(pattern string) {
+	notifTitle := fmt.Sprintf("Amp Permission [%s]", tmuxContext)
+	exec.Command("osascript", "-e",
+		fmt.Sprintf(`display notification "Auto-blocked: %s" with title "%s" sound name "Basso"`, pattern, notifTitle)).Run()
 }
 
 // ============================================================================
