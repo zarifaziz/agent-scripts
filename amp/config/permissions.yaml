@@ -56,9 +56,9 @@ patterns:
     - ":(){:|:&};:"
     - ":(){ :|:& };:"
     - "bomb(){ bomb|bomb& };bomb"
-    # xargs is dangerous - can bypass arg checking
+    # xargs with destructive commands
     - "xargs rm"
-    - "xargs -I"
+    - "xargs.*rm"
     # Device writes
     - "of=/dev/sd"
     - "of=/dev/disk"
@@ -240,11 +240,8 @@ commands:
 
   # Dangerous flags - block specific command + flag combos
   # Format: "command:flag" - blocks if command has this flag
+  # NOTE: rm -rf is allowed - dangerous_targets catches rm targeting / ~ $HOME .git etc
   dangerous_flags:
-    - "rm:-rf"
-    - "rm:-fr"
-    - "rm:-Rf"
-    - "rm:-fR"
     - "chmod:-R 777"
     - "chown:-R"
     - "rsync:--delete"

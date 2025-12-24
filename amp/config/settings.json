@@ -2,7 +2,9 @@
   "amp.url": "http://localhost:8318",
   "amp.git.commit.ampThread.enabled": true,
   "amp.git.commit.coauthor.enabled": true,
-  "amp.guardedFiles.allowlist": ["/Users/mac/.config/**"],
+  "amp.guardedFiles.allowlist": [
+    "/Users/mac/.config/**"
+  ],
   "amp.notifications.enabled": true,
   "amp.notifications.system.enabled": true,
   "amp.permissions": [
