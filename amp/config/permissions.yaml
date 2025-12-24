@@ -48,29 +48,50 @@ paths:
     - /usr/local/etc
 
 patterns:
-  # Catastrophic patterns - always blocked (exit 2)
-  # NOTE: Most command+target combos are handled by commands.dangerous_targets via AST
-  # This list catches things that can't be parsed or need early string matching
-  reject:
-    # Fork bombs
+  # =============================================================================
+  # RAW STRING PATTERNS (checked BEFORE parsing)
+  # =============================================================================
+  # Use for patterns that:
+  #   - May fail to parse (fork bombs, malformed syntax)
+  #   - Need to match regardless of context (even in strings is suspicious)
+  #   - Are injection attacks that exploit parsing itself
+  #
+  # WARNING: These match ANYWHERE in the raw command string, including:
+  #   - Inside quoted strings: echo "fork bomb :(){:|:&};:" -> BLOCKED
+  #   - In comments, heredocs, etc.
+  # Only add patterns here if matching them anywhere is always bad.
+  reject_raw:
+    # Fork bombs - can't reliably parse, always dangerous
     - ":(){:|:&};:"
     - ":(){ :|:& };:"
     - "bomb(){ bomb|bomb& };bomb"
-    # xargs with destructive commands
-    - "xargs rm"
-    - "xargs.*rm"
-    # Device writes
-    - "of=/dev/sd"
-    - "of=/dev/disk"
-    - "of=/dev/nvme"
-    - "> /dev/sd"
-    # Variable injection attacks
+    # Variable injection attacks - exploit shell expansion
     - "rm -rf $/"
     - "rm -rf ${"
     - ":-/}"
     - "$UNSET_VAR/"
-    # Path traversal
+    # Path traversal - suspicious in any context
     - "/../../../"
+
+  # =============================================================================
+  # COMMAND PATTERNS (checked AFTER parsing, against actual commands only)
+  # =============================================================================
+  # Use for patterns that:
+  #   - Should only match actual commands, not strings/comments
+  #   - Are dangerous commands that might appear legitimately in echo/strings
+  #
+  # These are checked against each parsed command's full text, NOT string literals.
+  # Example: echo "xargs rm foo" -> ALLOWED (it's just a string)
+  #          xargs rm foo        -> BLOCKED (actual command)
+  reject:
+    # xargs with destructive commands
+    - "xargs rm"
+    - "xargs.*rm"
+    # Device writes (dd to disk)
+    - "of=/dev/sd"
+    - "of=/dev/disk"
+    - "of=/dev/nvme"
+    - "> /dev/sd"
     # mkfs (filesystem format)
     - "mkfs"
     # sudo/doas with dangerous commands
