@@ -1,15 +1,15 @@
 ---
-name: spawn-servant
-description: Spawn a parallel coding agent in a tmux window when the user says "Run an agent", "Spawn an agent", or similar.
+name: handoff
+description: Spawn a parallel coding agent in a prise PTY when the user says "Run an agent", "Spawn an agent", "handoff", or similar. Use this instead of spawn-servant when running in prise (not tmux).
 allowed-tools:
   - bash
 metadata:
   version: "1.0"
 ---
 
-# Spawn Servant Skill
+# Handoff Skill (Prise)
 
-Use this skill to spawn a parallel subagent in a new tmux window for independent tasks.
+Use this skill to spawn a parallel subagent in a new prise PTY for independent tasks.
 
 ## Valid Subagents
 
@@ -18,31 +18,31 @@ Use this skill to spawn a parallel subagent in a new tmux window for independent
 
 ## Companion Script
 
-Use `spawn-servant` command (symlinked to `~/.local/bin`):
+Use `handoff` command (symlinked to `~/.local/bin`):
 
 ### Script Usage
 
 ```bash
 # Spawn a servant
-spawn-servant "<window-name>" "<agent-cmd>" "<task-prompt>"
+handoff "<agent-cmd>" "<task-prompt>"
 
-# Report back to parent (run from servant window)
-spawn-servant report <STATUS> "<message>"
+# Report back to parent (run from servant PTY)
+handoff report <parent-pty-id> "<message>"
 ```
 
 The script automatically:
 
-- Captures parent tmux session/window for return communication
-- Spawns servant in detached window (no focus switch)
+- Captures parent PTY ID for return communication
+- Spawns servant in new PTY (no focus switch)
 - Appends return protocol instructions to the prompt
-- Outputs spawn info (session, window number) for follow-up tasks
+- Outputs spawn info (PTY ID) for follow-up tasks
 
 ### Script Output
 
 ```
-=> fix-lint (window 5)
-   kill: tmux kill-window -t 'fix-lint'
-SPAWN_NAME=fix-lint
+=> PTY 14 spawned (parent: 1)
+   kill: prise pty kill 14
+HANDOFF_PTY=14
 ```
 
 ## Large Prompts
@@ -65,13 +65,13 @@ TASK:
 VERIFY: Run 'npm run lint' - should exit 0 with no errors
 EOF
 )
-spawn-servant "fix-lint" "amp" "$PROMPT"
+handoff "amp" "$PROMPT"
 ```
 
 Why variable-first is better:
 - Avoids nested quoting hell
 - Easier to debug (`echo "$PROMPT"` to verify)
-- Works with any prompt size (uses tmux buffers internally)
+- Prise has no length limit on send (unlike tmux)
 
 ## CRITICAL: Prompt Quality Requirements
 
@@ -89,13 +89,13 @@ When spawning a servant, you MUST provide comprehensive, detailed prompts. The s
 **BAD prompt (incomplete):**
 
 ```bash
-tmux send-keys -t "fix-auth" "Fix the authentication bug" C-m
+handoff "amp" "Fix the authentication bug"
 ```
 
 **GOOD prompt (comprehensive):**
 
 ```bash
-tmux send-keys -t "fix-auth" "following: @T-019b08fb-e9d0-7032-905c-da18fcc2b7f8 working off of that thread (use read_thread if any questions/confusions)
+handoff "amp" "following: @T-019b08fb-e9d0-7032-905c-da18fcc2b7f8 working off of that thread (use read_thread if any questions/confusions)
 
 Fix the JWT token expiration bug in /Users/mac/project/src/auth/jwt.go
 
@@ -108,7 +108,7 @@ TASK:
 
 VERIFY: Run 'go test ./src/auth/...' - all tests should pass
 
-REFERENCE: See similar fix pattern in /Users/mac/project/src/auth/session.go lines 80-95" C-m
+REFERENCE: See similar fix pattern in /Users/mac/project/src/auth/session.go lines 80-95"
 ```
 
 **Note:** Get your current thread ID from the environment context (Amp Thread URL) and include it so the servant can use `read_thread` to understand the full conversation history if needed.
@@ -134,19 +134,16 @@ If you find a critical bug or blocker, STOP and report immediately. Batch minor 
 The script appends return instructions telling the servant to use:
 
 ```bash
-spawn-servant report <STATUS> "<message>"
+handoff report <parent-pty-id> "<message>"
 ```
 
-Where STATUS is: `COMPLETED`, `FAILED`, or `PARTIAL`
-
 The report command:
-- Reads parent info from `/tmp/spawn-servant/<window-name>`
-- Uses tmux buffers (handles large reports)
-- Sends directly to parent window
+- Reads parent PTY ID from the return instructions
+- Sends report directly to parent PTY via `prise pty send`
 
 Example servant report:
 ```bash
-spawn-servant report COMPLETED "## Files Modified:
+handoff report 1 "## Files Modified:
 /Users/mac/project/src/auth.ts
 ## Changes Summary:
 Fixed token validation bug
@@ -160,26 +157,40 @@ After spawning, use the output variables for follow-up:
 
 ```bash
 # Send additional instructions
-tmux send-keys -t "$SPAWN_NAME" "Also fix the warnings please" C-m
+prise pty send "$HANDOFF_PTY" "Also fix the warnings please"
+prise pty send "$HANDOFF_PTY" Enter
 
-# Check if window still exists
-tmux list-windows | grep "$SPAWN_NAME"
+# Check PTY status
+prise pty list
+
+# Capture PTY screen
+prise pty capture "$HANDOFF_PTY"
 
 # Kill the servant
-tmux kill-window -t "$SPAWN_NAME"
+prise pty kill "$HANDOFF_PTY"
 ```
+
+## Prise vs Tmux
+
+| Feature | spawn-servant (tmux) | handoff (prise) |
+|---------|---------------------|-----------------|
+| Identification | session:window | PTY ID |
+| Send text | paste-buffer (line-by-line) | direct send (no limit) |
+| Create window | `new-window -d -n name` | `pty spawn --cwd` |
+| List | `list-windows` | `pty list` |
+| Kill | `kill-window -t name` | `pty kill <id>` |
 
 ## Guidelines
 
-- Use `-d` flag to spawn quietly in background (no focus switch)
-- Sanitize window titles: replace spaces with dashes, remove special characters
-- Keep window titles short and descriptive (max 30 characters)
-- Use `tmux kill-window -t "window-name"` to stop a subagent if needed
-- Check status with `tmux list-windows`
-- Switch to servant with `tmux select-window -t "window-name"` when needed
+- PTYs spawn in background (no focus switch)
+- Keep prompts detailed - spawned agent has no parent context
+- Use `prise pty kill <id>` to stop a subagent if needed
+- Check status with `prise pty list`
+- Capture output with `prise pty capture <id>`
 
 ## When to Use
 
 - Parallel independent tasks (e.g., run tests while implementing feature)
 - Long-running operations that don't need immediate results
 - Multiple file/directory operations that don't overlap
+- When running in prise instead of tmux
