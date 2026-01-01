@@ -3,10 +3,12 @@
   "amp.git.commit.ampThread.enabled": true,
   "amp.git.commit.coauthor.enabled": true,
   "amp.guardedFiles.allowlist": [
+    "/Users/mac/.pi/agent/models.json",
+    "**/.env*",
     "/Users/mac/.config/**"
   ],
-  "amp.notifications.enabled": true,
-  "amp.notifications.system.enabled": true,
+  "amp.notifications.enabled": false,
+  "amp.notifications.system.enabled": false,
   "amp.permissions": [
     {
       "tool": "*",
