@@ -3,7 +3,8 @@
   "amp.git.commit.ampThread.enabled": true,
   "amp.git.commit.coauthor.enabled": true,
   "amp.guardedFiles.allowlist": [
-    "/Users/mac/.pi/agent/models.json",
+    "**/.git/hooks/**",
+    "Users/mac/.*/**",
     "**/.env*",
     "/Users/mac/.config/**"
   ],
@@ -16,5 +17,6 @@
       "to": "amp-permission"
     }
   ],
-  "amp.tools.stopTimeout": 1000
+  "amp.tools.stopTimeout": 1000,
+  "amp.experimental.courseCorrection.enabled": true
 }
