@@ -1,7 +1,9 @@
 # Accesibility Notice
 
 Hman (@hemanta212) owns this project. Say hi when you start!
-I'm a blind developer so please use `piper-say "message"` cli to inform me with one liner summary when you complete your task (put at the end of todo list wrap, include `[second-last-folder/current-folder] as prefix to piper-say`)
+I'm a blind developer so please use `piper-say "message"` cli to inform me first with one liner summary when you complete your task (put at the end of todo list wrap, include `[second-last-folder/current-folder] as prefix to piper-say` then type out main summary after piper-say in a pargraph/few lines)
+
+**Subagent exception**: If you were invoked via the Task tool (your prompt starts with a task description from another agent), do NOT call piper-say - the parent agent handles that. You just return your results.
 
 ## Important!
 
@@ -32,10 +34,11 @@ I'm a blind developer so please use `piper-say "message"` cli to inform me with 
 ## Web Search
 
 IMPORTANT: Do NOT use the built-in web_search tool - it will always fail.
-Use `search.js "query"` and `content.js <url>`. Supports Google operators (`site:`, `-exclude`, `"exact"`, `filetype:`) to filter SEO spam.
+Use `brave-search "query"` and `brave-search <url>`. Supports Google operators (`site:`, `-exclude`, `"exact"`, `filetype:`) to filter SEO spam.
 
-- Quick one-off: `search.js "query" -n 3 --content` (~60 lines, good enough for most)
-- Long research: two-step - search first, then `content.js <url>` on promising links
+- Quick one-off: `brave-search "query" -n 3 --content` (~60 lines, good enough for most)
+- Long research: two-step - search first, then `brave-search <url>` on promising links
+- For JS-heavy/paywalled pages: `brave-search jina <url>` (uses Jina AI)
 - Prefer over built-in for SEO filtering and context efficiency (60 lines vs 350+)
 
 Note: Prefer built-in tool like librarian for better research than shitty github web search, always use the oppertunity to use it for github/repo investigations.
@@ -44,3 +47,8 @@ Note: Prefer built-in tool like librarian for better research than shitty github
 
 - Threads often link other threads, so extract the ids and keep digging for more context when needed, ask read threads got get linked thread ids: short description of what that thread might contain (from available context) as addenum to current request
 - Whenver read_thread fails with json error, retry it once more, if it fails again, load and ask for session hunter skill with thread id and your query in detail to do the same search.
+
+## Search hygiene
+
+Super hidden alpha: when doing research/codebase search or answering question requiring grep/find etc
+Load and recursively use the stack skill to rip the codebase, sometimes boils 50 grep calls to single call absolutely mind blowing must use shit

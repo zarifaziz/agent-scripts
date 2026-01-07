@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/sst/opencode-sdk-go"
-	"github.com/sst/opencode-sdk-go/option"
 	"tutero/oc-tools/shared"
 )
 
@@ -72,7 +71,6 @@ func main() {
 	workDir := "/tmp"
 
 	if logger != nil {
-		logger.LogSeparator("SDK SETUP")
 		logger.Log("Work directory: %s", workDir)
 	}
 
@@ -80,17 +78,14 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Create client directly (not using shared.NewClient to avoid extra output)
-	baseURL := os.Getenv("OPENCODE_URL")
-	if baseURL == "" {
-		baseURL = fmt.Sprintf("http://%s:%d", shared.DefaultHostname, shared.DefaultPort)
-	}
-
+	// Create client using shared.NewClientWithLogger - handles auto-starting server
 	if logger != nil {
-		logger.Log("SDK base URL: %s", baseURL)
+		logger.LogSeparator("SDK SETUP")
 	}
+	sharedClient := shared.NewClientWithLogger(ctx, logger)
+	defer sharedClient.Close()
 
-	client := opencode.NewClient(option.WithBaseURL(baseURL))
+	client := sharedClient.Client
 
 	// Create session
 	if logger != nil {
@@ -132,13 +127,20 @@ func main() {
 		}
 	}()
 
-	// Send prompt to branch-namer agent
+	// Find best free model dynamically
 	if logger != nil {
-		logger.LogSeparator("AGENT CALL")
-		logger.Log("Sending prompt to branch-namer agent...")
+		logger.LogSeparator("MODEL SELECTION")
+		logger.Log("Finding best free model...")
 	}
-	startTime := time.Now()
-	response, err := client.Session.Prompt(ctx, sessionID, opencode.SessionPromptParams{
+	freeModel, err := sharedClient.FindBestFreeModel()
+	if err != nil {
+		if logger != nil {
+			logger.Log("WARNING: could not find free model: %v, using default", err)
+		}
+	}
+
+	// Build prompt params
+	promptParams := opencode.SessionPromptParams{
 		Agent:     opencode.F("branch-namer"),
 		Directory: opencode.F(workDir),
 		Parts: opencode.F([]opencode.SessionPromptParamsPartUnion{
@@ -147,7 +149,30 @@ func main() {
 				Text: opencode.F(prompt),
 			},
 		}),
-	})
+	}
+
+	// Use best free model if found
+	if freeModel != nil {
+		if logger != nil {
+			logger.Log("Using free model: %s/%s (%s)", freeModel.ProviderID, freeModel.ModelID, freeModel.Name)
+		}
+		promptParams.Model = opencode.F(opencode.SessionPromptParamsModel{
+			ProviderID: opencode.F(freeModel.ProviderID),
+			ModelID:    opencode.F(freeModel.ModelID),
+		})
+	} else {
+		if logger != nil {
+			logger.Log("No free model found, using default")
+		}
+	}
+
+	// Send prompt to branch-namer agent
+	if logger != nil {
+		logger.LogSeparator("AGENT CALL")
+		logger.Log("Sending prompt to branch-namer agent...")
+	}
+	startTime := time.Now()
+	response, err := client.Session.Prompt(ctx, sessionID, promptParams)
 	elapsed := time.Since(startTime)
 
 	if err != nil {

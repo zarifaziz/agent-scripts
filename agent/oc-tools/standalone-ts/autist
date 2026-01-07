@@ -1,0 +1,173 @@
+#!/usr/bin/env bun
+/**
+ * autist - Oracle-style advisory agent using pi coding agent SDK
+ * 
+ * Usage:
+ *   autist "prompt"
+ *   echo "prompt" | autist
+ *   autist -s SESSION_ID "follow-up prompt"
+ *   autist -r low|medium|high "prompt"
+ */
+
+import { parseArgs } from "util";
+import { createAgentSession, SessionManager, discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
+import * as fs from "fs";
+import * as path from "path";
+
+const LOG_DIR = `${process.env.HOME}/.cache/scripts/autist`;
+const INVOKE_DIR = process.cwd();
+
+// Parse CLI arguments
+const { values, positionals } = parseArgs({
+  args: Bun.argv.slice(2),
+  options: {
+    session: { type: "string", short: "s" },
+    reasoning: { type: "string", short: "r", default: "high" },
+    help: { type: "boolean", short: "h" },
+  },
+  allowPositionals: true,
+});
+
+if (values.help) {
+  console.error(`Usage: autist [-s|--session SESSION_ID] "prompt"
+   or: echo "prompt" | autist [-s|--session SESSION_ID]
+   or: autist [-s|--session SESSION_ID] <<EOF
+       prompt text here
+       EOF
+
+Options:
+  -s, --session SESSION_ID    Resume an existing session
+  -r, --reasoning LEVEL       Reasoning level: low, medium, high (default: high)
+  -h, --help                  Show this help message
+
+Examples:
+  autist "analyze this codebase"
+  echo "refactor the auth module" | autist
+  autist -s abc123 "continue from where we left off"`);
+  process.exit(0);
+}
+
+// Validate reasoning level
+const validReasoningLevels = ["low", "medium", "high"];
+if (!validReasoningLevels.includes(values.reasoning as string)) {
+  console.error(`Error: -r must be one of: ${validReasoningLevels.join(", ")}`);
+  process.exit(1);
+}
+
+// Get prompt from args or stdin
+let prompt: string;
+if (positionals.length > 0) {
+  prompt = positionals.join(" ");
+} else if (!process.stdin.isTTY) {
+  prompt = await Bun.stdin.text();
+  prompt = prompt.trim();
+} else {
+  console.error(`Usage: autist [-s|--session SESSION_ID] "prompt"
+   or: echo "prompt" | autist [-s|--session SESSION_ID]
+
+Use --help for more information`);
+  process.exit(1);
+}
+
+if (!prompt) {
+  console.error("Error: No prompt provided");
+  process.exit(1);
+}
+
+// Oracle system prompt
+const oracleInstruction = `You are a read-only advisory oracle consulted for complex analysis, planning, and reviews.
+Do not perform implementation work yourself - focus strictly on researching, analyzing, and providing expert guidance.
+Review the situation thoroughly and respond with actionable advice that adheres to the query's requirements.
+
+USER QUERY:
+`;
+const fullPrompt = oracleInstruction + prompt;
+
+// Setup logging
+fs.mkdirSync(LOG_DIR, { recursive: true });
+const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+const logFile = path.join(LOG_DIR, `${timestamp}-${process.pid}.log`);
+const logStream = fs.createWriteStream(logFile);
+
+// Setup auth and models
+const authStorage = discoverAuthStorage();
+const modelRegistry = discoverModels(authStorage);
+
+// Find our specific model: amplify-oai / gpt-5.2-codex
+const model = modelRegistry.find("amplify-oai", "gpt-5.2-codex");
+if (!model) {
+  console.error("Error: Model amplify-oai/gpt-5.2-codex not found in ~/.pi/agent/models.json");
+  process.exit(1);
+}
+
+// Setup session manager
+let sessionManager: ReturnType<typeof SessionManager.create>;
+if (values.session) {
+  const sessionId = values.session as string;
+  // Find session by ID or path
+  const sessions = SessionManager.list(INVOKE_DIR);
+  const match = sessions.find(s => s.id === sessionId || s.id.startsWith(sessionId) || s.path.includes(sessionId));
+  if (match) {
+    sessionManager = SessionManager.open(match.path);
+  } else if (fs.existsSync(sessionId)) {
+    sessionManager = SessionManager.open(sessionId);
+  } else {
+    console.error(`Error: No session matching '${sessionId}' found`);
+    process.exit(1);
+  }
+} else {
+  sessionManager = SessionManager.create(INVOKE_DIR);
+}
+
+// Create agent session
+const { session, modelFallbackMessage } = await createAgentSession({
+  model,
+  thinkingLevel: values.reasoning as "low" | "medium" | "high",
+  authStorage,
+  modelRegistry,
+  sessionManager,
+  cwd: INVOKE_DIR,
+});
+
+if (modelFallbackMessage) {
+  console.error(`Note: ${modelFallbackMessage}`);
+}
+
+// Print session info early for timeout recovery
+console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+console.error(`If timeout, resume: autist -s ${session.sessionId} <<'EOF'`);
+console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+// Collect output
+let output = "";
+session.subscribe((event) => {
+  if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+    const delta = event.assistantMessageEvent.delta;
+    process.stdout.write(delta);
+    output += delta;
+    logStream.write(delta);
+  }
+});
+
+// Run prompt
+try {
+  await session.prompt(fullPrompt);
+  console.log();
+  
+  // Print session info for follow-up
+  const sessionId = session.sessionId;
+  const sessionFile = session.sessionFile;
+  
+  console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log(`Done. Follow up: autist -s ${sessionId} <<'EOF'`);
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+} catch (error) {
+  console.error(`\nError: ${error}`);
+  console.error(`[debug] Logs saved to: ${logFile}`);
+  if (session?.sessionFile) {
+    console.error(`[debug] Session file: ${session.sessionFile}`);
+  }
+  process.exit(1);
+} finally {
+  logStream.end();
+}
