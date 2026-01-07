@@ -58,7 +58,8 @@ type PathsConfig struct {
 }
 
 type PatternsConfig struct {
-	Reject    []string `yaml:"reject"`
+	RejectRaw []string `yaml:"reject_raw"` // Checked against raw string BEFORE parsing
+	Reject    []string `yaml:"reject"`     // Checked against parsed commands AFTER parsing
 	AlwaysAsk []string `yaml:"always_ask"`
 }
 
@@ -276,11 +277,11 @@ func handleBash(args map[string]interface{}) {
 
 	currentCmd = cmd // Store for prompt context
 
-	// 1. Check reject patterns FIRST (before parsing - catches malformed dangerous commands)
-	for _, pattern := range config.Patterns.Reject {
+	// 1. Check raw reject patterns BEFORE parsing (fork bombs, injection attacks)
+	for _, pattern := range config.Patterns.RejectRaw {
 		if strings.Contains(cmd, pattern) {
-			logDecision("BLOCK", "Bash", fmt.Sprintf("reject pattern: %s", pattern))
-			fmt.Fprintf(os.Stderr, "BLOCKED: matches reject pattern: %s\n", pattern)
+			logDecision("BLOCK", "Bash", fmt.Sprintf("reject_raw pattern: %s", pattern))
+			sendAutoBlockNotification(pattern)
 			os.Exit(ExitReject)
 		}
 	}
@@ -298,15 +299,41 @@ func handleBash(args map[string]interface{}) {
 		}
 	}
 
-	// 2. Check risky patterns from AST analysis
+	// 3. Check reject patterns against parsed commands (command name only, not string literals)
+	for _, pattern := range config.Patterns.Reject {
+		for _, cmdInfo := range result.Commands {
+			// Match against command name, not full command with string args
+			if strings.Contains(cmdInfo.Name, pattern) {
+				logDecision("BLOCK", "Bash", fmt.Sprintf("reject pattern: %s in command: %s", pattern, cmdInfo.Name))
+				sendAutoBlockNotification(pattern)
+				os.Exit(ExitReject)
+			}
+			// Also check if pattern matches "cmd arg" style (e.g., "xargs rm")
+			// But only check the command name + first few args, not quoted strings
+			cmdWithArgs := cmdInfo.Name
+			for _, arg := range cmdInfo.Args[1:] { // skip first arg (command name)
+				// Skip if arg looks like a quoted string (contains spaces or quotes)
+				if !strings.ContainsAny(arg, " \"'") {
+					cmdWithArgs += " " + arg
+				}
+			}
+			if strings.Contains(cmdWithArgs, pattern) {
+				logDecision("BLOCK", "Bash", fmt.Sprintf("reject pattern: %s in command: %s", pattern, cmdWithArgs))
+				sendAutoBlockNotification(pattern)
+				os.Exit(ExitReject)
+			}
+		}
+	}
+
+	// 4. Check risky patterns from AST analysis
 	if len(result.RiskyPatterns) > 0 {
 		detail := result.RiskyPatterns[0].Detail
 		logDecision("BLOCK", "Bash", fmt.Sprintf("risky: %s", detail))
-		fmt.Fprintf(os.Stderr, "BLOCKED: %s\n", detail)
+		sendAutoBlockNotification(detail)
 		os.Exit(ExitReject)
 	}
 
-	// 3. Check pipes to interpreters
+	// 5. Check pipes to interpreters
 	for _, pipe := range result.PipesToInterp {
 		if pipe.RequiresPrompt {
 			msg := fmt.Sprintf("Piping to %s\nSource: %s", pipe.Interpreter, pipe.SourceType)
@@ -823,6 +850,12 @@ func sendTimeoutNotification(title string) {
 	notifTitle := fmt.Sprintf("Amp Permission [%s]", tmuxContext)
 	exec.Command("osascript", "-e",
 		fmt.Sprintf(`display notification "Timed out - auto denied" with title "%s" sound name "Basso"`, notifTitle)).Run()
+}
+
+func sendAutoBlockNotification(pattern string) {
+	notifTitle := fmt.Sprintf("Amp Permission [%s]", tmuxContext)
+	exec.Command("osascript", "-e",
+		fmt.Sprintf(`display notification "Auto-blocked: %s" with title "%s" sound name "Basso"`, pattern, notifTitle)).Run()
 }
 
 // ============================================================================

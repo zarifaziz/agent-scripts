@@ -10,12 +10,49 @@
 set -uo pipefail
 
 LOG_FILE="${AMP_PROMPT_LOG:-$HOME/.config/amp-permissions/prompt.log}"
+REPORTED_FILE="${AMP_REPORTED_FILE:-$HOME/.config/amp-permissions/reported.json}"
 TIMEOUT_SECS="${AMP_PROMPT_TIMEOUT:-60}"
 
 log_prompt() {
     local result="$1"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     echo "[$timestamp] [$TMUX_CTX] $result | $TITLE | $CMD" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+report_and_allow() {
+    local timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    local cmd_hash=$(echo -n "$CMD" | md5 | cut -c1-16)
+    
+    # Ensure file exists with valid JSON array
+    if [[ ! -f "$REPORTED_FILE" ]] || [[ ! -s "$REPORTED_FILE" ]]; then
+        echo '[]' > "$REPORTED_FILE"
+    fi
+    
+    # Append to reported.json
+    local entry=$(jq -n \
+        --arg ts "$timestamp" \
+        --arg hash "$cmd_hash" \
+        --arg title "$TITLE" \
+        --arg cmd "$CMD" \
+        --arg pwd "$PWD_PATH" \
+        --arg tmux "$TMUX_CTX" \
+        --arg msg "$MESSAGE" \
+        '{timestamp: $ts, hash: $hash, title: $title, cmd: $cmd, pwd: $pwd, tmux: $tmux, message: $msg}')
+    
+    jq --argjson entry "$entry" '. += [$entry]' "$REPORTED_FILE" > "${REPORTED_FILE}.tmp" && \
+        mv "${REPORTED_FILE}.tmp" "$REPORTED_FILE"
+    
+    log_prompt "REPORT"
+    
+    # Notify user
+    osascript -e "display notification \"Logged for review - command allowed\" with title \"Amp Permission - Reported\" sound name \"Pop\"" 2>/dev/null || true
+}
+
+check_reported() {
+    # Check if this exact command was reported before (auto-allow)
+    [[ ! -f "$REPORTED_FILE" ]] && return 1
+    local cmd_hash=$(echo -n "$CMD" | md5 | cut -c1-16)
+    jq -e --arg hash "$cmd_hash" '.[] | select(.hash == $hash)' "$REPORTED_FILE" &>/dev/null
 }
 
 notify_error() {
@@ -30,23 +67,6 @@ notify_timeout() {
     [[ "$TMUX_CTX" != "no-tmux" ]] && notif_title="Amp Permission [$TMUX_CTX]"
     local pwd_short=$(echo "$PWD_PATH" | awk -F/ '{print $(NF-1)"/"$NF}')
     osascript -e "display notification \"Timed out - auto denied\n[$pwd_short]\" with title \"$notif_title\" sound name \"Basso\"" 2>/dev/null || true
-}
-
-visit_tmux_pane() {
-    [[ -z "${TMUX:-}" ]] && return
-    local target
-    if [[ -n "${TMUX_PANE:-}" ]]; then
-        target=$(tmux display-message -t "$TMUX_PANE" -p '#S:#I' 2>/dev/null)
-    else
-        target=$(tmux display-message -p '#S:#I' 2>/dev/null)
-    fi
-    tmux switch-client -t "$target" 2>/dev/null || tmux select-window -t "$target" 2>/dev/null
-    for app in WezTerm iTerm Alacritty kitty Terminal; do
-        if pgrep -qf "$app"; then
-            open -a "$app"
-            break
-        fi
-    done
 }
 
 #------------------------------------------------------------------------------
@@ -77,58 +97,58 @@ TMUX_CTX=$(echo "$INPUT" | jq -r '.context.tmux // "no-tmux"')
 [[ -z "$TITLE" ]] && notify_error "Missing title in input"
 [[ -z "$MESSAGE" ]] && notify_error "Missing message in input"
 
+# Auto-allow if previously reported
+if check_reported; then
+    log_prompt "AUTO-ALLOW (reported)"
+    exit 0
+fi
+
 # Escape for osascript
 escaped_msg="${MESSAGE//\"/\\\"}"
 escaped_title="${TITLE//\"/\\\"}"
 full_title="[$TMUX_CTX] $escaped_title"
 
-# Dialog loop (for Visit button)
-while true; do
-    buttons='{"Deny", "Allow"}'
-    if [[ "$TMUX_CTX" != "no-tmux" ]] && [[ -n "${TMUX:-}" ]]; then
-        buttons='{"Deny", "Visit", "Allow"}'
-    fi
+# Show dialog (max 3 buttons in osascript)
+buttons='{"Deny", "Report", "Allow"}'
 
-    osa_output=$(osascript -e "
-        set dialogResult to display dialog \"$escaped_msg\" with title \"$full_title\" buttons $buttons default button \"Deny\" with icon caution giving up after $TIMEOUT_SECS
-        return (button returned of dialogResult) & \"|\" & (gave up of dialogResult)
-    " 2>&1)
-    osa_exit=$?
+osa_output=$(osascript -e "
+    set dialogResult to display dialog \"$escaped_msg\" with title \"$full_title\" buttons $buttons default button \"Deny\" with icon caution giving up after $TIMEOUT_SECS
+    return (button returned of dialogResult) & \"|\" & (gave up of dialogResult)
+" 2>&1)
+osa_exit=$?
 
-    # osascript failure (not timeout/cancel) = auto deny
-    if [[ $osa_exit -ne 0 ]] && [[ ! "$osa_output" =~ "gave up" ]]; then
-        # User pressed cancel or osascript error
-        if [[ "$osa_output" =~ "User canceled" ]]; then
-            log_prompt "CANCEL"
-            exit 2
-        fi
-        notify_error "Dialog failed: ${osa_output:0:50}"
-    fi
-
-    # Parse result
-    result="${osa_output%%|*}"
-    gave_up="${osa_output##*|}"
-
-    # Visit button - switch pane and re-prompt
-    if [[ "$result" == "Visit" ]]; then
-        visit_tmux_pane
-        sleep 0.3
-        continue
-    fi
-
-    # Timeout
-    if [[ "$gave_up" == "true" ]]; then
-        notify_timeout
-        log_prompt "TIMEOUT"
+# osascript failure (not timeout/cancel) = auto deny
+if [[ $osa_exit -ne 0 ]] && [[ ! "$osa_output" =~ "gave up" ]]; then
+    if [[ "$osa_output" =~ "User canceled" ]]; then
+        log_prompt "CANCEL"
         exit 2
     fi
+    notify_error "Dialog failed: ${osa_output:0:50}"
+fi
 
-    # Allow or Deny
-    if [[ "$result" == "Allow" ]]; then
+# Parse result
+result="${osa_output%%|*}"
+gave_up="${osa_output##*|}"
+
+# Timeout
+if [[ "$gave_up" == "true" ]]; then
+    notify_timeout
+    log_prompt "TIMEOUT"
+    exit 2
+fi
+
+# Handle button press
+case "$result" in
+    "Allow")
         log_prompt "ALLOW"
         exit 0
-    else
+        ;;
+    "Report")
+        report_and_allow
+        exit 0
+        ;;
+    *)
         log_prompt "DENY"
         exit 2
-    fi
-done
+        ;;
+esac
