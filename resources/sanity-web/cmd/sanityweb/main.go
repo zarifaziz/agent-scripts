@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"encoding/json" // Added import
+
 	"github.com/gorilla/websocket"
 
 	"sanity-web/core"
@@ -64,6 +66,38 @@ func (h *hub) addClient(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.mu.Unlock()
+}
+
+func (h *hub) handleLogEntry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Error reading request body", http.StatusInternalServerError)
+		return
+	}
+
+	if len(data) == 0 {
+		http.Error(w, "Empty request body", http.StatusBadRequest)
+		return
+	}
+
+	// Optionally validate if it's valid JSON before broadcasting
+	// A more robust solution might process it through core.Processor
+	// For now, we'll just broadcast raw bytes, assuming the client sends valid NDJSON compatible data
+	var js map[string]any
+	if err := json.Unmarshal(data, &js); err != nil {
+		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
+		return
+	}
+
+	// Broadcast the received log entry to all connected clients
+	h.broadcast <- data
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "Log entry received and broadcasted")
 }
 
 func (h *hub) handleStream(w http.ResponseWriter, r *http.Request) {
@@ -232,6 +266,7 @@ func main() {
 	http.HandleFunc("/pin", h.handlePinSave)
 	http.HandleFunc("/pin/", h.handlePinLoad)
 	http.HandleFunc("/pin-delete/", h.handlePinDelete)
+	http.HandleFunc("/api/log", h.handleLogEntry) // New endpoint to accept log entries
 	http.HandleFunc("/p/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(webDir, "index.html"))
 	})
