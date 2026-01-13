@@ -17,17 +17,35 @@ get_thread_id_by_title() {
     sqlite3 "$DB" "SELECT id FROM threads WHERE title = '$escaped' ORDER BY created DESC LIMIT 1;" 2>/dev/null || echo ""
 }
 
-# List all live amp panes (only where bun is actually running)
+# Check if a node process is eamp (has eternal-amp in open files)
+is_eamp_process() {
+    local pane="$1"
+    local pane_pid child_pid
+    pane_pid=$(tmux display-message -t "$pane" -p '#{pane_pid}' 2>/dev/null) || return 1
+    child_pid=$(pgrep -P "$pane_pid" 2>/dev/null | head -1) || return 1
+    lsof -p "$child_pid" 2>/dev/null | grep -q 'eternal-amp'
+}
+
+# List all live amp panes (bun = amp, node = check if eamp)
 # Format: session:window.pane\ttitle\tpath\tthread_id
 list_live_panes() {
     tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_title}|#{pane_current_command}' 2>/dev/null \
-        | grep -E '\|amp - .+\|bun$' \
+        | grep -E '\|(bun|node)$' \
         | while IFS='|' read -r pane title cmd; do
-            # Extract title and path from "amp - Title - ~/path"
+            # Skip node processes that aren't eamp
+            if [[ "$cmd" == "node" ]] && ! is_eamp_process "$pane"; then
+                continue
+            fi
             local thread_title thread_path thread_id
-            thread_title=$(echo "$title" | sed -E 's/^amp - (.+) - (~|\/).*/\1/')
-            thread_path=$(echo "$title" | sed -E 's/^amp - .+ - //')
-            # Get thread ID by matching title in DB
+            # Try to extract from amp title format
+            if [[ "$title" =~ ^amp\ -\ .+\ -\ (~|/) ]]; then
+                thread_title=$(echo "$title" | sed -E 's/^amp - (.+) - (~|\/).*/\1/')
+                thread_path=$(echo "$title" | sed -E 's/^amp - .+ - //')
+            else
+                # Fallback: use window name or pane title
+                thread_title="${title:-Untitled}"
+                thread_path=$(tmux display-message -t "$pane" -p '#{pane_current_path}' 2>/dev/null | sed "s|$HOME|~|")
+            fi
             thread_id=$(get_thread_id_by_title "$thread_title")
             printf '%s\t%s\t%s\t%s\n' "$pane" "$thread_title" "$thread_path" "$thread_id"
         done

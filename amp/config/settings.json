@@ -3,10 +3,13 @@
   "amp.git.commit.ampThread.enabled": true,
   "amp.git.commit.coauthor.enabled": true,
   "amp.guardedFiles.allowlist": [
+    "**/.git/hooks/**",
+    "Users/mac/.*/**",
+    "**/.env*",
     "/Users/mac/.config/**"
   ],
-  "amp.notifications.enabled": true,
-  "amp.notifications.system.enabled": true,
+  "amp.notifications.enabled": false,
+  "amp.notifications.system.enabled": false,
   "amp.permissions": [
     {
       "tool": "*",
@@ -14,5 +17,10 @@
       "to": "amp-permission"
     }
   ],
-  "amp.tools.stopTimeout": 1000
+  "amp.tools.disable": ["builtin:todo"],
+  "amp.tools.stopTimeout": 1000,
+  "amp.experimental.courseCorrection.enabled": true,
+  "amp.todos.enabled": false,
+  "amp.experimental.finalToolCalls": true,
+  "amp.experimental.illustrator": true
 }

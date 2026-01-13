@@ -1,0 +1,268 @@
+#!/usr/bin/env bun
+/**
+ * session-hunter - Hunt down Amp sessions by code changes, file paths, or function names
+ * 
+ * Usage:
+ *   session-hunter "Find session where UpdateLessonPlanForClass was replaced"
+ *   echo "prompt" | session-hunter
+ *   session-hunter -s SESSION_ID "continue searching"
+ */
+
+import { parseArgs } from "util";
+import { createAgentSession, SessionManager, discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
+import * as fs from "fs";
+import * as path from "path";
+
+const LOG_DIR = `${process.env.HOME}/.cache/scripts/session-hunter`;
+const INVOKE_DIR = process.cwd();
+
+// System prompt from session-hunter.md
+const SYSTEM_PROMPT = `You are the **Session Hunter** - find Amp sessions where specific code changes happened.
+
+## SESSION STORAGE STRUCTURE
+
+\`\`\`
+~/.amp/file-changes/T-{uuid}/
+├── toolu_*.{uuid}  (JSON files with before/after/diff/uri)
+└── ...
+\`\`\`
+
+Each file contains: \`uri\` (file path), \`before\`, \`after\`, \`diff\`, \`timestamp\`
+
+## QUICK SEARCH PATTERNS
+
+### 1. Find sessions that touched specific files
+
+\`\`\`bash
+grep -r "frontend/app/schools-app" ~/.amp/file-changes/*/
+# Returns thread IDs
+\`\`\`
+
+### 2. Find sessions with function name changes
+
+\`\`\`bash
+# Look in both directions
+grep -r "UpdateLessonPlanForClass\\|updateLessonPlanName" ~/.amp/file-changes/
+\`\`\`
+
+### 3. Extract modified files from a thread
+
+\`\`\`bash
+for file in ~/.amp/file-changes/T-{thread-id}/*; do
+  jq -r '.uri' "$file" 2>/dev/null
+done | sort -u
+\`\`\`
+
+### 4. Search for specific code patterns in diffs
+
+\`\`\`bash
+for file in ~/.amp/file-changes/T-*/*; do
+  jq -r '.diff' "$file" 2>/dev/null | grep -i "pattern"
+done
+\`\`\`
+
+## EFFICIENT WORKFLOW
+
+1. **Broad search first**: Use grep across all thread dirs
+2. **Filter by path**: If user specifies frontend/backend/specific-dir
+3. **Extract thread IDs**: From grep results (dirname of matches)
+4. **Use read_thread**: Once you have candidate thread ID
+5. **Fallback to manual**: If read_thread fails (JSON parse errors), use jq directly
+
+## FILTER BY DIRECTORY
+
+\`\`\`bash
+# Frontend only
+for thread_dir in ~/.amp/file-changes/T-*; do
+  thread_id=$(basename "$thread_dir")
+  for file in "$thread_dir"/*; do
+    uri=$(jq -r '.uri' "$file" 2>/dev/null)
+    if [[ "$uri" == *"frontend/app"* ]]; then
+      echo "$thread_id"
+      break
+    fi
+  done
+done | sort -u
+\`\`\`
+
+## COMMON SEARCHES
+
+**Find rename/refactors**:
+
+\`\`\`bash
+grep -ri "rename\\|refactor" ~/.amp/file-changes/ | grep "frontend"
+\`\`\`
+
+**Find sessions modifying specific file**:
+
+\`\`\`bash
+jq -r 'select(.uri | contains("specific_file.dart")) | .uri' ~/.amp/file-changes/*/*
+\`\`\`
+
+**Find by function name in before/after**:
+
+\`\`\`bash
+jq -r 'select(.before | contains("functionName")) | .uri' ~/.amp/file-changes/*/*
+\`\`\`
+
+## WHEN READ_THREAD FAILS
+
+Common error: \`JSON Parse error: Unrecognized token\`
+
+- Fallback: Use \`jq\` directly on tool call files
+- Extract \`.uri\`, \`.diff\`, \`.before\`, \`.after\` manually
+
+## KEY POINTS
+
+- Thread IDs format: \`T-{uuid}\`
+- Tool call files: \`toolu_*.{uuid}\`
+- Always use \`2>/dev/null\` to suppress "no matches" errors
+- Use \`sort -u\` to deduplicate thread IDs
+- File URIs are absolute paths starting with \`file://\``;
+
+// Parse CLI arguments
+const { values, positionals } = parseArgs({
+  args: Bun.argv.slice(2),
+  options: {
+    session: { type: "string", short: "s" },
+    verbose: { type: "boolean", short: "v" },
+    help: { type: "boolean", short: "h" },
+  },
+  allowPositionals: true,
+});
+
+if (values.help) {
+  console.error(`Usage: session-hunter [-s SESSION_ID] [-v] "prompt"
+   or: echo "prompt" | session-hunter [-s SESSION_ID]
+   or: session-hunter [-s SESSION_ID] <<EOF
+       prompt text here
+       EOF
+
+Options:
+  -s, --session SESSION_ID    Continue an existing session
+  -v                          Verbose mode (show logs location)
+  -h, --help                  Show this help message
+
+Examples:
+  session-hunter "Find session where UpdateLessonPlanForClass was replaced"
+  session-hunter "Which session modified worksheet_app_bar.dart?"
+  echo "Find all sessions that touched frontend/app/schools-app" | session-hunter
+  session-hunter -s abc123 "search for more sessions with similar changes"`);
+  process.exit(0);
+}
+
+// Get prompt from args or stdin
+let prompt: string;
+if (positionals.length > 0) {
+  prompt = positionals.join(" ");
+} else if (!process.stdin.isTTY) {
+  prompt = await Bun.stdin.text();
+  prompt = prompt.trim();
+} else {
+  console.error(`Usage: session-hunter [-s SESSION_ID] [-v] "prompt"
+   or: echo "prompt" | session-hunter [-s SESSION_ID]
+
+Use --help for more information`);
+  process.exit(1);
+}
+
+if (!prompt) {
+  console.error("Error: No prompt provided");
+  process.exit(1);
+}
+
+// Prepend system instruction
+const fullPrompt = SYSTEM_PROMPT + "\n\nUSER QUERY:\n" + prompt;
+
+// Setup logging
+fs.mkdirSync(LOG_DIR, { recursive: true });
+const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+const logFile = path.join(LOG_DIR, `${timestamp}-${process.pid}.log`);
+const logStream = fs.createWriteStream(logFile);
+
+// Setup auth and models
+const authStorage = discoverAuthStorage();
+const modelRegistry = discoverModels(authStorage);
+
+// Use Claude Haiku 4.5 for session-hunter (matches original - fast and cheap)
+const model = modelRegistry.find("amplify", "claude-haiku-4-5-20251001");
+if (!model) {
+  console.error("Error: Model amplify/claude-haiku-4-5-20251001 not found in ~/.pi/agent/models.json");
+  process.exit(1);
+}
+
+// Setup session manager
+let sessionManager: ReturnType<typeof SessionManager.create>;
+const sessionId = values.session as string | undefined;
+if (sessionId) {
+  const sessions = SessionManager.list(INVOKE_DIR);
+  const match = sessions.find(s => s.id === sessionId || s.id.startsWith(sessionId) || s.path.includes(sessionId));
+  if (match) {
+    sessionManager = SessionManager.open(match.path);
+  } else if (fs.existsSync(sessionId)) {
+    sessionManager = SessionManager.open(sessionId);
+  } else {
+    console.error(`Error: No session matching '${sessionId}' found`);
+    process.exit(1);
+  }
+} else {
+  sessionManager = SessionManager.create(INVOKE_DIR);
+}
+
+// Create agent session
+const { session, modelFallbackMessage } = await createAgentSession({
+  model,
+  thinkingLevel: "medium",
+  authStorage,
+  modelRegistry,
+  sessionManager,
+  cwd: INVOKE_DIR,
+});
+
+if (modelFallbackMessage) {
+  console.error(`Note: ${modelFallbackMessage}`);
+}
+
+// Print session info early for timeout recovery
+console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+console.error(`If timeout, resume: session-hunter -s ${session.sessionId} <<'EOF'`);
+console.error("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+// Collect output
+let output = "";
+session.subscribe((event) => {
+  if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+    const delta = event.assistantMessageEvent.delta;
+    process.stdout.write(delta);
+    output += delta;
+    logStream.write(delta);
+  }
+});
+
+// Run prompt
+try {
+  await session.prompt(fullPrompt);
+  console.log();
+  
+  const sid = session.sessionId;
+  
+  console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log(`Done. Follow up: session-hunter -s ${sid} <<'EOF'`);
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  
+  if (values.verbose) {
+    console.error(`[debug] Logs saved to: ${logFile}`);
+    if (session.sessionFile) {
+      console.error(`[debug] Session file: ${session.sessionFile}`);
+    }
+  }
+} catch (error) {
+  console.error(`\nError: ${error}`);
+  console.error(`[debug] Logs saved to: ${logFile}`);
+  if (session?.sessionFile) {
+    console.error(`[debug] Session file: ${session.sessionFile}`);
+  }
+  process.exit(1);
+} finally {
+  logStream.end();
+}
