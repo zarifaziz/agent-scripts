@@ -1,6 +1,6 @@
 ---
 name: stack
-description: Trace Go function call graphs. Use for "how does X work" or "who calls Y" questions instead of chaining greps.
+description: Trace Go/Dart function call graphs. Use for "how does X work" or "who calls Y" questions instead of chaining greps.
 allowed-tools:
   - bash
 metadata:
@@ -9,7 +9,7 @@ metadata:
 
 # Stack - Call Graph Tracer
 
-Traces Go function calls. Replaces manual grep chains for code flow analysis.
+Traces Go/Dart function calls. Replaces manual grep chains for code flow analysis.
 
 ## Core Commands
 
