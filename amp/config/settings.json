@@ -17,6 +17,10 @@
       "to": "amp-permission"
     }
   ],
+  "amp.tools.disable": ["builtin:todo"],
   "amp.tools.stopTimeout": 1000,
-  "amp.experimental.courseCorrection.enabled": true
+  "amp.experimental.courseCorrection.enabled": true,
+  "amp.todos.enabled": false,
+  "amp.experimental.finalToolCalls": true,
+  "amp.experimental.illustrator": true
 }
