@@ -25,6 +25,7 @@ Given a lesson plan or worksheet plan ID or URL, this skill:
 ## Usage
 
 The user will provide either:
+
 - **Lesson Plan URL**: `https://schools.tutero.com/lesson-plan/lp_01K76BE7AM487533R1GEK8M343?id&tab=slides`
 - **Worksheet Plan URL**: `https://schools.tutero.dev/worksheets/wp_01K86J68WJD4EPD1D5RBQJ64GS`
 - **Direct ID**: `lp_01K76BE7AM487533R1GEK8M343` or `wp_01K86J68WJD4EPD1D5RBQJ64GS`
@@ -58,6 +59,7 @@ fi
 ### Step 2: Determine Database Environment
 
 Map domain to preset:
+
 - `.com` → prod preset (try `resources-prod`, fallback to `resources`)
 - `.dev` → dev preset (`resources-dev`)
 - `.staging-dev` → staging preset (`resources-staging`)
@@ -131,6 +133,7 @@ cypher-safe --preset <preset-name> "<query>" | jq '.' | ~/.local/bin/quill-plain
 ```
 
 The `quill-plain` binary:
+
 - **Location**: `~/.local/bin/quill-plain`
 - **Input**: JSON via pipe or heredoc
 - **Output**: Formatted plaintext questions
@@ -199,6 +202,7 @@ done
 ## Output Format
 
 The skill will present:
+
 1. **Plan metadata**: ID, type, environment
 2. **Node information**: For each node containing questions:
    - Node type and labels
