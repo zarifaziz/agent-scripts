@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# zellij-spawn - Spawn parallel coding agents in Zellij tabs
+# Usage: zellij-spawn <tab-name> <agent-cmd> <prompt>
+#        zellij-spawn report <STATUS> "<message>"
+
+SPAWN_DIR="/tmp/zellij-spawn"
+mkdir -p "$SPAWN_DIR"
+
+show_help() {
+    cat <<'EOF'
+zellij-spawn - Spawn parallel coding agents in Zellij tabs
+
+USAGE:
+    zellij-spawn <tab-name> <agent-cmd> <prompt>
+    zellij-spawn report <STATUS> "<message>"
+
+SPAWN MODE:
+    zellij-spawn "fix-lint" "amp" "$PROMPT"
+    
+    Creates a new Zellij tab named "fix-lint", runs amp with the prompt.
+    Writes spawn metadata to /tmp/zellij-spawn/<tab-name>.meta
+
+REPORT MODE (run from spawned agent):
+    zellij-spawn report COMPLETED "Fixed all lint errors"
+    zellij-spawn report FAILED "Could not resolve dependency conflict"
+    zellij-spawn report PARTIAL "Fixed 3/5 issues, need clarification on rest"
+    
+    Writes report to /tmp/zellij-spawn/<parent-tab>.report
+    Parent agent should watch/read this file.
+
+STATUS VALUES:
+    COMPLETED - Task finished successfully
+    FAILED    - Task could not be completed
+    PARTIAL   - Partial progress, needs intervention
+
+ENVIRONMENT:
+    ZELLIJ_SPAWN_PARENT - Set automatically, contains parent tab name
+EOF
+}
+
+sanitize_name() {
+    echo "$1" | tr ' ' '-' | tr -cd 'a-zA-Z0-9-_' | cut -c1-30
+}
+
+get_current_tab_name() {
+    # Try to get current tab name from zellij
+    zellij action query-tab-names 2>/dev/null | head -1 || echo "parent-$$"
+}
+
+spawn_agent() {
+    local tab_name="$1"
+    local agent_cmd="$2"
+    local prompt="$3"
+    
+    tab_name=$(sanitize_name "$tab_name")
+    local parent_tab
+    parent_tab=$(get_current_tab_name)
+    
+    # Write metadata
+    local meta_file="$SPAWN_DIR/${tab_name}.meta"
+    cat > "$meta_file" <<EOF
+PARENT_TAB=$parent_tab
+SPAWN_TIME=$(date -Iseconds)
+AGENT_CMD=$agent_cmd
+EOF
+    
+    # Build return protocol instructions
+    local return_instructions="
+
+---
+RETURN PROTOCOL: When task is complete, report back using:
+    zellij-spawn report <STATUS> \"<message>\"
+Where STATUS is: COMPLETED, FAILED, or PARTIAL
+Example: zellij-spawn report COMPLETED \"Fixed all issues. Tests pass.\""
+
+    local full_prompt="${prompt}${return_instructions}"
+    
+    # Write prompt to temp file (handles large prompts, avoids quoting issues)
+    local prompt_file="$SPAWN_DIR/${tab_name}.prompt"
+    echo "$full_prompt" > "$prompt_file"
+    
+    # Create wrapper script that pipes prompt to agent
+    local wrapper_script="$SPAWN_DIR/${tab_name}.sh"
+    cat > "$wrapper_script" <<WRAPPER
+#!/usr/bin/env bash
+cd "$PWD"
+cat '$prompt_file' | $agent_cmd
+WRAPPER
+    chmod +x "$wrapper_script"
+    
+    # Spawn new tab running the wrapper script
+    zellij run --name "$tab_name" --cwd "$PWD" -- "$wrapper_script" &
+    
+    # Small delay for tab to initialize
+    sleep 0.3
+    
+    # Output spawn info
+    echo "=> $tab_name (parent: $parent_tab)"
+    echo "   kill: zellij action go-to-tab-name '$tab_name' && zellij action close-tab"
+    echo "   report: $SPAWN_DIR/${tab_name}.report"
+    echo "SPAWN_NAME=$tab_name"
+}
+
+report_status() {
+    local status="$1"
+    local message="$2"
+    
+    # Validate status
+    case "$status" in
+        COMPLETED|FAILED|PARTIAL) ;;
+        *)
+            echo "ERROR: Invalid status '$status'. Use COMPLETED, FAILED, or PARTIAL" >&2
+            exit 1
+            ;;
+    esac
+    
+    # Get parent tab from environment or meta file
+    local parent_tab="${ZELLIJ_SPAWN_PARENT:-}"
+    
+    if [[ -z "$parent_tab" ]]; then
+        # Try to find parent from meta files
+        for meta in "$SPAWN_DIR"/*.meta; do
+            if [[ -f "$meta" ]]; then
+                source "$meta"
+                parent_tab="$PARENT_TAB"
+                break
+            fi
+        done
+    fi
+    
+    if [[ -z "$parent_tab" ]]; then
+        echo "WARNING: Could not determine parent tab. Writing report to stdout." >&2
+        echo "[$status] $message"
+        return
+    fi
+    
+    # Write report to file
+    local report_file="$SPAWN_DIR/${parent_tab}.report"
+    cat >> "$report_file" <<EOF
+---
+STATUS: $status
+TIME: $(date -Iseconds)
+MESSAGE:
+$message
+EOF
+    
+    echo "Report written to $report_file"
+    echo "Parent tab '$parent_tab' can read this file."
+}
+
+check_status() {
+    echo "=== Spawned Agents Status ==="
+    echo ""
+    
+    # Check for running tabs
+    local tabs
+    tabs=$(zellij action query-tab-names 2>/dev/null || echo "")
+    
+    # Check meta files for spawned agents
+    local found=0
+    for meta in "$SPAWN_DIR"/*.meta; do
+        [[ -f "$meta" ]] || continue
+        found=1
+        
+        local tab_name
+        tab_name=$(basename "$meta" .meta)
+        
+        source "$meta"
+        
+        local running="NO"
+        if echo "$tabs" | grep -q "^${tab_name}$"; then
+            running="YES"
+        fi
+        
+        local report_file="$SPAWN_DIR/${tab_name}.report"
+        local has_report="NO"
+        local status=""
+        if [[ -f "$report_file" ]]; then
+            has_report="YES"
+            status=$(grep "^STATUS:" "$report_file" | tail -1 | cut -d: -f2 | xargs)
+        fi
+        
+        echo "Tab: $tab_name"
+        echo "  Running: $running"
+        echo "  Report: $has_report ${status:+($status)}"
+        echo "  Spawned: $SPAWN_TIME"
+        echo ""
+    done
+    
+    if [[ $found -eq 0 ]]; then
+        echo "No spawned agents found."
+    fi
+    
+    # Show any reports
+    echo "=== Reports ==="
+    for report in "$SPAWN_DIR"/*.report; do
+        [[ -f "$report" ]] || { echo "No reports yet."; break; }
+        echo ""
+        echo "--- $(basename "$report") ---"
+        cat "$report"
+    done
+}
+
+# Main dispatch
+case "${1:-}" in
+    -h|--help|help)
+        show_help
+        exit 0
+        ;;
+    report)
+        if [[ $# -lt 3 ]]; then
+            echo "Usage: zellij-spawn report <STATUS> \"<message>\"" >&2
+            exit 1
+        fi
+        report_status "$2" "$3"
+        ;;
+    status)
+        check_status
+        ;;
+    "")
+        show_help
+        exit 1
+        ;;
+    *)
+        if [[ $# -lt 3 ]]; then
+            echo "Usage: zellij-spawn <tab-name> <agent-cmd> <prompt>" >&2
+            exit 1
+        fi
+        spawn_agent "$1" "$2" "$3"
+        ;;
+esac

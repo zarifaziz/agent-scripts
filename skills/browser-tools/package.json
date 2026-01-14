@@ -7,7 +7,7 @@
   "license": "MIT",
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
-    "browser-tools": "link:",
+
     "cheerio": "^1.1.2",
     "jsdom": "^27.0.1",
     "puppeteer": "^24.31.0",
