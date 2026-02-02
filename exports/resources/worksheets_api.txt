@@ -1,0 +1,264 @@
+// api/worksheets/edges.go
+package worksheets
+
+import "github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+
+type WorksheetExaminesTopicEdge struct {
+	edge.Edge `neo4j:"EXAMINES"`
+}
+
+type WorksheetExaminesSubtopicEdge struct {
+	edge.Edge `neo4j:"EXAMINES"`
+}
+
+type UserCreatedWorksheetEdge struct {
+	edge.Edge `neo4j:"CREATED"`
+}
+
+type StreamedWorksheetsContainsStreamedWorksheetEdge struct {
+	edge.Edge `neo4j:"CONTAINS"`
+	Order     int `json:"order"`
+}
+
+type StreamedWorksheetAssignedToUserEdge struct {
+	edge.Edge `neo4j:"ASSIGNED_TO"`
+}
+
+type StreamedWorksheetPromptsQuestionEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+	Order     int `json:"order"`
+}
+
+type IndividualWorksheetsContainsIndividualWorksheetEdge struct {
+	edge.Edge `neo4j:"CONTAINS"`
+}
+
+type IndividualWorksheetAssignedToUserEdge struct {
+	edge.Edge `neo4j:"ASSIGNED_TO"`
+}
+
+type IndividualWorksheetPromptsQuestionEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+	Order     int `json:"order"`
+}
+
+type StandardWorksheetPromptsQuestionEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+	Order     int `json:"order"`
+}
+
+// api/worksheets/entity.go
+package worksheets
+
+//
+import (
+	"time"
+
+	"github.com/rlch/neogo"
+)
+
+type Worksheet interface {
+	neogo.IAbstract
+	IsEntity()
+	IsWorksheet()
+	IsResource()
+	GetID() string
+	GetName() string
+	Base() *BaseWorksheet
+}
+
+type BaseWorksheet struct {
+	neogo.Abstract `neo4j:"Worksheet"`
+	neogo.Node
+	CreatedAt time.Time `json:"createdAt"`
+
+	Name          string        `json:"name"`
+	Duration      time.Duration `json:"duration"`
+	Type          WorksheetType `json:"type"`
+	QuestionCount int           `json:"questionCount"`
+}
+
+func (BaseWorksheet) IsWorksheet() {}
+func (BaseWorksheet) IsEntity()    {}
+func (BaseWorksheet) IsResource()  {}
+func (w BaseWorksheet) GetName() string {
+	return w.Name
+}
+
+func (w *BaseWorksheet) Base() *BaseWorksheet {
+	return w
+}
+
+func (w BaseWorksheet) GetID() string {
+	return w.ID
+}
+
+func (BaseWorksheet) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&StreamedWorksheets{},
+		&IndividualWorksheets{},
+		&StandardWorksheet{},
+		&SituationalQuestionWorksheet{},
+		&WarmUpQuestionsWithContextNodeWorksheet{},
+		&ScaffoldedQuestionWorksheet{},
+		&MultipleChoiceQuestionWorksheet{},
+		&ShortAnswerQuestionWorksheet{},
+		&MisconceptionQuestionWorksheet{},
+	}
+}
+
+type (
+	StreamedWorksheets struct {
+		BaseWorksheet
+	}
+	IndividualWorksheets struct {
+		BaseWorksheet
+	}
+	StandardWorksheet struct {
+		BaseWorksheet
+	}
+	SituationalQuestionWorksheet struct {
+		BaseWorksheet
+	}
+	WarmUpQuestionsWithContextNodeWorksheet struct {
+		BaseWorksheet
+	}
+	ScaffoldedQuestionWorksheet struct {
+		BaseWorksheet
+	}
+	MultipleChoiceQuestionWorksheet struct {
+		BaseWorksheet
+	}
+	ShortAnswerQuestionWorksheet struct {
+		BaseWorksheet
+	}
+	MisconceptionQuestionWorksheet struct {
+		BaseWorksheet
+	}
+	StreamedWorksheet struct {
+		neogo.Node `neo4j:"StreamedWorkSheet"`
+		CreatedAt  time.Time `json:"createdAt"`
+
+		Title string `json:"title"`
+		Icon  string `json:"icon"`
+	}
+	IndividualWorksheet struct {
+		neogo.Node `neo4j:"IndividualWorksheet"`
+		CreatedAt  time.Time `json:"createdAt"`
+	}
+)
+
+// api/worksheets/repository.go
+package worksheets
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/question"
+	"github.com/MathGaps/resources/api/subtopic"
+	"github.com/MathGaps/resources/api/topic"
+	"github.com/MathGaps/resources/api/user"
+)
+
+type WorksheetsRepository interface {
+	GenerateWorksheet(ctx context.Context, classID *id.ID, input GenerateWorksheetInput) (Worksheet, error)
+	UpdateWorksheet(ctx context.Context, worksheetID id.ID, classID *id.ID, input UpdateWorksheetInput) (Worksheet, error)
+	DeleteWorksheet(ctx context.Context, worksheetID id.ID) (bool, error)
+	DeleteByIDs(ctx context.Context, worksheetIDs []id.ID) (bool, error)
+	Get(ctx context.Context, worksheetID id.ID) (Worksheet, error)
+	GetWorksheetsForTopic(ctx context.Context, topicID id.ID) ([]Worksheet, error)
+	GetIcon(ctx context.Context, worksheetID id.ID) (string, error)
+	GetTopic(ctx context.Context, worksheetID id.ID) (*topic.BaseTopic, error)
+	GetSubtopics(ctx context.Context, worksheetID id.ID) ([]*subtopic.Subtopic, error)
+	TransferWorksheetToClass(ctx context.Context, teacherID, classID id.ID) error
+}
+
+type StreamedWorksheetsRepository interface {
+	// Generate cluster the students into the streams and assign questions to the worksheet assigned to each stream
+	Generate(ctx context.Context, worksheetID id.ID) (*StreamedWorksheets, error)
+	GetLinkedStreamedWorksheets(ctx context.Context, worksheetID id.ID) ([]*StreamedWorksheet, error)
+	GetQuestions(ctx context.Context, streamedWorksheetID id.ID) ([]*question.Question, error)
+	GetStudentsOfStreamedWorksheet(ctx context.Context, streamedWorksheetID id.ID) ([]*user.User, error)
+	UpdateStreamedWorksheet(ctx context.Context, streamedWorksheetID id.ID, input UpdateStreamedWorksheetInput) (*StreamedWorksheet, error)
+	MoveStudentToStreamedWorksheet(ctx context.Context, input MoveStudentToStreamedWorksheetInput) (*StreamedWorksheet, error)
+}
+
+type IndividualWorksheetsRepository interface {
+	// Generate assign the question to the worksheet assigned to each student in the class
+	Generate(ctx context.Context, worksheetID id.ID, classID *id.ID) (*IndividualWorksheets, error)
+	GetLinkedIndividualWorksheets(ctx context.Context, worksheetID id.ID) ([]*IndividualWorksheet, error)
+	GetQuestions(ctx context.Context, individualWorksheetID id.ID) ([]*question.Question, error)
+	GetStudent(ctx context.Context, individualWorksheetID id.ID) (*user.User, error)
+}
+
+type ScaffoldedQuestionWorksheetRepository interface{}
+
+type MultipleChoiceQuestionWorksheetRepository interface{}
+
+type ShortAnswerQuestionWorksheetRepository interface{}
+
+//implgen:ignore
+type MisconceptionQuestionWorksheetRepository interface{}
+
+type StandardWorksheetRepository interface {
+	// Generate assign the questions to a single worksheet assigned to a class or student
+	Generate(ctx context.Context, worksheetID id.ID, classID *id.ID) (*StandardWorksheet, error)
+	GetQuestions(ctx context.Context, worksheetID id.ID) ([]*question.Question, error)
+}
+
+type WorksheetQuestionsRepository interface {
+	GenerateQuestionsForSkills(ctx context.Context, skills []id.ID, totalQuestions int) (_ []id.ID, err error)
+	GenerateQuestionsForStudents(
+		ctx context.Context,
+		classID id.ID,
+		skillIDs []id.ID,
+		worksheetStudents map[id.ID][]id.ID,
+		questionCount int,
+	) ([]*WorksheetQuestions, error)
+}
+
+type WorksheetType string
+
+const (
+	StreamedWorksheetsType                      WorksheetType = "STREAMED"
+	IndividualWorksheetsType                    WorksheetType = "INDIVIDUAL"
+	StandardWorksheetType                       WorksheetType = "STANDARD"
+	SituationalQuestionWorksheetType            WorksheetType = "SITUATIONAL_QUESTION"
+	WarmUpQuestionsWithContextNodeWorksheetType WorksheetType = "WARM_UP_QUESTIONS_WITH_CONTEXT"
+	ScaffoldedQuestionWorksheetType             WorksheetType = "SCAFFOLDED_QUESTION"
+	MultipleChoiceQuestionWorksheetType         WorksheetType = "MULTIPLE_CHOICE_QUESTION"
+	ShortAnswerQuestionWorksheetType            WorksheetType = "SHORT_ANSWER_QUESTION"
+	MisconceptionQuestionWorksheetType          WorksheetType = "MISCONCEPTION_QUESTION"
+)
+
+type GenerateWorksheetInput struct {
+	Name          string        `json:"name"`
+	QuestionCount int           `json:"questionCount"`
+	TopicID       id.ID         `json:"topicID"`
+	SubtopicIDs   []id.ID       `json:"subtopicID"`
+	Type          WorksheetType `json:"type"`
+}
+
+type UpdateWorksheetInput struct {
+	Name          *string `json:"name,omitempty"`
+	QuestionCount *int    `json:"questionCount,omitempty"`
+	SubtopicIDs   []id.ID `json:"subtopicID,omitempty"`
+}
+
+type UpdateStreamedWorksheetInput struct {
+	Title *string `json:"title,omitempty"`
+	Icon  *string `json:"icon,omitempty"`
+}
+
+type MoveStudentToStreamedWorksheetInput struct {
+	WorksheetID         id.ID `json:"worksheetID"`
+	StreamedWorksheetID id.ID `json:"streamedWorksheetID"`
+	StudentID           id.ID `json:"studentID"`
+}
+
+type WorksheetQuestions struct {
+	WorksheetID id.ID   `json:"worksheetID"`
+	QuestionIDs []id.ID `json:"questionIDs"`
+}
+

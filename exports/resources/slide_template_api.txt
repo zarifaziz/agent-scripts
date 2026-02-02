@@ -1,0 +1,45 @@
+// api/slide_template/entity.go
+package slidetemplate
+
+import (
+	"time"
+
+	"github.com/MathGaps/resources/api/common"
+	"github.com/rlch/neogo"
+)
+
+type SlideTemplate struct {
+	neogo.Node           `neo4j:"SlideTemplate"`
+	CreatedAt            time.Time           `json:"createdAt"`
+	Title                *string             `json:"title"`
+	Icon                 *common.IconMapType `json:"icon"`
+	Color                *string             `json:"color"`
+	WhiteboardTemplateID string              `json:"whiteboardTemplateID"`
+}
+
+func (SlideTemplate) IsEntity() {}
+
+// api/slide_template/repository.go
+package slidetemplate
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/common"
+)
+
+type Repository interface {
+	Get(ctx context.Context, id id.ID) (*SlideTemplate, error)
+	Delete(ctx context.Context, id id.ID) error
+	Update(ctx context.Context, id id.ID, input UpdateSlideTemplateInput) (*SlideTemplate, error)
+	GetSlideTemplate(ctx context.Context, id id.ID) (*SlideTemplate, error)
+	GetByGroup(ctx context.Context, groupID id.ID) ([]*SlideTemplate, error)
+}
+
+type UpdateSlideTemplateInput struct {
+	Title *string             `json:"title,omitempty"`
+	Icon  *common.IconMapType `json:"icon,omitempty"`
+	Color *string             `json:"color,omitempty"`
+}
+

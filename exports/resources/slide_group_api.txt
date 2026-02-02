@@ -1,0 +1,65 @@
+// api/slide_group/entity.go
+package slidegroup
+
+import (
+	"time"
+
+	"github.com/MathGaps/resources/api/common"
+	"github.com/rlch/neogo"
+)
+
+type SlideGroup struct {
+	neogo.Node `neo4j:"SlideGroup"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	Emoji       string             `json:"emoji"`
+	Icon        common.IconMapType `json:"icon"`
+	Color       string             `json:"color"`
+}
+
+func (SlideGroup) IsEntity() {}
+
+// api/slide_group/repository.go
+package slidegroup
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/common"
+)
+
+type Repository interface {
+	Get(ctx context.Context, id id.ID) (*SlideGroup, error)
+	GetAll(ctx context.Context) ([]*SlideGroup, error)
+	Create(ctx context.Context, input CreateSlideGroupInput) (*SlideGroup, error)
+	Update(ctx context.Context, id id.ID, input UpdateSlideGroupInput) (*SlideGroup, error)
+	AddSlideTemplateToGroup(ctx context.Context, groupID id.ID, input SlideTemplateInput) (*SlideGroup, error)
+	DeleteSlideGroup(ctx context.Context, id id.ID) (bool, error)
+}
+
+type CreateSlideGroupInput struct {
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	Emoji       string             `json:"emoji"`
+	Icon        common.IconMapType `json:"icon"`
+	Color       string             `json:"color"`
+}
+
+type UpdateSlideGroupInput struct {
+	Title       *string             `json:"title,omitempty"`
+	Description *string             `json:"description,omitempty"`
+	Emoji       *string             `json:"emoji,omitempty"`
+	Icon        *common.IconMapType `json:"icon,omitempty"`
+	Color       *string             `json:"color,omitempty"`
+}
+
+type SlideTemplateInput struct {
+	Title                *string             `json:"title"`
+	Icon                 *common.IconMapType `json:"icon"`
+	Color                *string             `json:"color"`
+	WhiteboardTemplateID string              `json:"whiteboardTemplateID"`
+}
+

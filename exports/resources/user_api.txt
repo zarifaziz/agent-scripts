@@ -1,0 +1,23 @@
+// api/user/entity.go
+package user
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/rlch/neogo"
+)
+
+type User struct {
+	neogo.Node `neo4j:"User,id:user"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+func (User) IsEntity() {}
+
+type Student struct {
+	ID id.ID `json:"id"`
+}
+
+func (Student) IsEntity() {}
+

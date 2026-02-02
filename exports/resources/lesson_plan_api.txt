@@ -1,0 +1,3584 @@
+// api/lesson_plan/configs.go
+package lessonplan
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"reflect"
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/question"
+	"github.com/MathGaps/resources/api/resource"
+	"github.com/rlch/neogo"
+	"github.com/samber/lo"
+	"github.com/samber/oops"
+)
+
+var LessonPlanSkillDuration time.Duration = min(5)
+
+type LessonPlanConfig interface {
+	IsEnabled() bool
+	IsExcluded() bool
+	SetDuration(time.Duration)
+}
+
+type LessonPlanConfigs []LessonPlanConfig
+
+type LessonPlanNodeConfig struct {
+	neogo.Node `neo4j:"LessonPlanNodeConfig"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	LessonPlanNode       `json:"-"`
+	GroupDuration        *time.Duration `json:"groupDuration,omitempty"`
+	FlexibleFromDuration *time.Duration `json:"flexibleFromDuration,omitempty"`
+	CanToggle            bool           `json:"canToggle"`
+	Excluded             bool           `json:"-"`
+}
+
+type LessonPlanNodeGroup struct {
+	neogo.Node
+	CreatedAt time.Time `json:"createdAt"`
+
+	Enabled  bool                    `json:"enabled"`
+	Type     LessonPlanNodeGroupType `json:"type"`
+	Duration time.Duration           `json:"duration"`
+}
+
+type LessonPlanGroupConfig struct {
+	LessonPlanNodeGroup `neo4j:"LessonPlanGroupConfig"`
+	Nodes               []LessonPlanNodeConfig `json:"-"`
+	CanToggle           bool                   `json:"canToggle"`
+}
+
+func (l *LessonPlanNodeConfig) IsEnabled() bool {
+	return l.Base().Enabled
+}
+
+func (l *LessonPlanNodeConfig) IsExcluded() bool {
+	return l.Excluded
+}
+
+func (l *LessonPlanNodeConfig) SetDuration(duration time.Duration) {
+	if l.GroupDuration != nil {
+		*l.GroupDuration = duration
+	}
+	l.Base().Duration = duration
+}
+
+func (l *LessonPlanGroupConfig) IsEnabled() bool {
+	return l.Enabled
+}
+
+func (l *LessonPlanGroupConfig) IsExcluded() bool {
+	return false
+}
+
+func (l *LessonPlanGroupConfig) SetDuration(duration time.Duration) {
+	l.Duration = duration
+	for _, node := range l.Nodes {
+		node.SetDuration(duration)
+	}
+}
+
+type SectionConfig struct {
+	Duration          time.Duration     `json:"duration"`
+	LessonPlanConfigs LessonPlanConfigs `json:"lessonPlanConfigs"`
+}
+type SectionConfigs struct {
+	IntroductionConfigs SectionConfig `json:"introductionConfigs"`
+	PracticeConfigs     SectionConfig `json:"practiceConfigs"`
+}
+
+func (sc *SectionConfigs) Configs() LessonPlanConfigs {
+	return append(sc.IntroductionConfigs.LessonPlanConfigs, sc.PracticeConfigs.LessonPlanConfigs...)
+}
+
+func (sc *SectionConfigs) GroupConfigs() []LessonPlanGroupConfig {
+	groupConfigs := sc.IntroductionConfigs.LessonPlanConfigs.GroupConfigs()
+	groupConfigs = append(groupConfigs, sc.PracticeConfigs.LessonPlanConfigs.GroupConfigs()...)
+	return groupConfigs
+}
+
+func (sc *SectionConfigs) SetDuration(duration time.Duration) {
+	sc.IntroductionConfigs.Duration = duration
+	sc.PracticeConfigs.Duration = duration
+	for _, config := range sc.Configs() {
+		config.SetDuration(duration)
+	}
+	for _, groupConfig := range sc.GroupConfigs() {
+		groupConfig.SetDuration(duration)
+	}
+}
+
+// We have to distribute the lesson duration among the sections based on the nodes included in the sections
+// If lesson doesn't have any nodes, we distribute the total duration equally among the sections
+// If certain sections have nodes, we distribute the remaining duration among the sections with nodes
+func (sc *SectionConfigs) FlexDurations(lessonDuration time.Duration) {
+	totalConcreteDuration := sc.IntroductionConfigs.Duration + sc.PracticeConfigs.Duration
+
+	sectionsToDistributeDuration := map[*SectionConfig]bool{}
+	if sc.IntroductionConfigs.Duration > 0 {
+		sectionsToDistributeDuration[&sc.IntroductionConfigs] = true
+	}
+	if sc.PracticeConfigs.Duration > 0 {
+		sectionsToDistributeDuration[&sc.PracticeConfigs] = true
+	}
+
+	if len(sectionsToDistributeDuration) == 0 {
+		sectionsToDistributeDuration = map[*SectionConfig]bool{
+			&sc.IntroductionConfigs: true,
+			&sc.PracticeConfigs:     true,
+		}
+	}
+
+	// the section duration should not be in decimals i.e 10.56 minutes should be converted to 11 minutes
+	numOfSectionsToDistributeDuration := len(sectionsToDistributeDuration)
+	remainingDuration := lessonDuration - totalConcreteDuration
+	for sectionConfig := range sectionsToDistributeDuration {
+		durationToDistribute := remainingDuration / time.Duration(numOfSectionsToDistributeDuration)
+		durationWithoutDecimals := int(math.Ceil(durationToDistribute.Minutes()))
+		durationToDistributeInMinutes := time.Duration(durationWithoutDecimals) * time.Minute
+		durationToDistribute = time.Duration(durationToDistributeInMinutes.Nanoseconds())
+		sectionConfig.Duration += durationToDistribute
+		remainingDuration -= durationToDistribute
+		numOfSectionsToDistributeDuration -= 1
+	}
+}
+
+var (
+	ErrNoLessonPlanConfigs               = errors.New("no config for provided duration")
+	ErrReduceDurationBeyondConfigMinimum = errors.New("cannot reduce duration beyond the config's minimum duration")
+	lpnTypeMap                           = map[reflect.Type]LessonPlanNodeType{
+		reflect.TypeOf(&WarmUpQuestionsNode{}):            LessonPlanNodeTypeWarmUpQuestions,
+		reflect.TypeOf(&ThoughtSparkerNode{}):             LessonPlanNodeTypeThoughtSparker,
+		reflect.TypeOf(&ApplicationNode{}):                LessonPlanNodeTypeApplication,
+		reflect.TypeOf(&ActivityNode{}):                   LessonPlanNodeTypeActivity,
+		reflect.TypeOf(&BrainTeaserNode{}):                LessonPlanNodeTypeBrainTeaser,
+		reflect.TypeOf(&MathsDebateNode{}):                LessonPlanNodeTypeMathsDebate,
+		reflect.TypeOf(&ExitTicketNode{}):                 LessonPlanNodeTypeExitTicket,
+		reflect.TypeOf(&ContemplativeQuestionNode{}):      LessonPlanNodeTypeContemplativeQuestion,
+		reflect.TypeOf(&SkillsNode{}):                     LessonPlanNodeTypeSkills,
+		reflect.TypeOf(&LessonAgendaNode{}):               LessonPlanNodeTypeLessonAgenda,
+		reflect.TypeOf(&LearningGoalsNode{}):              LessonPlanNodeTypeLearningGoals,
+		reflect.TypeOf(&SituationalQuestionNode{}):        LessonPlanNodeTypeSituationalQuestion,
+		reflect.TypeOf(&MisconceptionQuestionNode{}):      LessonPlanNodeTypeMisconceptionQuestion,
+		reflect.TypeOf(&ScaffoldedQuestionNode{}):         LessonPlanNodeTypeScaffoldedQuestion,
+		reflect.TypeOf(&MultipleChoiceQuestionNode{}):     LessonPlanNodeTypeMultipleChoiceQuestion,
+		reflect.TypeOf(&ShortAnswerQuestionNode{}):        LessonPlanNodeTypeShortAnswerQuestion,
+		reflect.TypeOf(&WarmUpQuestionsWithContextNode{}): LessonPlanNodeTypeWarmUpQuestionsWithContext,
+		reflect.TypeOf(&TeacherQuestionNode{}):            LessonPlanNodeTypeTeacherQuestions,
+		reflect.TypeOf(&StudentQuestionNode{}):            LessonPlanNodeTypeStudentQuestions,
+		reflect.TypeOf(&SkillSlideNode{}):                 LessonPlanNodeTypeSkillSlide,
+		reflect.TypeOf(&IntroductionNode{}):               LessonPlanNodeTypeIntroduction,
+	}
+)
+
+func sectionConfigs(nc nodeConfigsToInclude, lessonDuration time.Duration) *SectionConfigs {
+	nodeIndex := -1
+	introConfigs := LessonPlanConfigs{}
+	practiceConfigs := LessonPlanConfigs{}
+
+	introConfigs = append(introConfigs, config(lpn[IntroductionNode](nc.IntroductionNode.Enabled, min(1), increment(&nodeIndex)), nc.IntroductionNode.Excluded))
+	introConfigs = append(introConfigs, config(lpn[LessonAgendaNode](nc.LessonAgenda.Enabled, min(2), increment(&nodeIndex)), nc.LessonAgenda.Excluded))
+	introConfigs = append(introConfigs, config(lpn[LearningGoalsNode](nc.LearningGoals.Enabled, min(2), increment(&nodeIndex)), nc.LearningGoals.Excluded))
+	introConfigs = append(introConfigs,
+		group(nc.LessonStarter.Enabled, LessonPlanNodeGroupLessonStarter, []*LessonPlanNodeConfig{
+			config(lpn[WarmUpQuestionsNode](nc.WarmUpQuestionsNode.Enabled, sec(150), increment(&nodeIndex)), nc.WarmUpQuestionsNode.Excluded),
+			config(lpn[WarmUpQuestionsWithContextNode](nc.WarmUpQuestionsWithContextNode.Enabled, sec(150), increment(&nodeIndex)), nc.WarmUpQuestionsWithContextNode.Excluded),
+		}, true),
+	)
+	introConfigs = append(introConfigs, config(lpn[ApplicationNode](nc.ApplicationNode.Enabled, min(3), increment(&nodeIndex)), nc.ApplicationNode.Excluded))
+
+	activityDuration := min(7)
+	if lessonDuration < min(35) {
+		activityDuration = min(5)
+	}
+	practiceConfigs = append(practiceConfigs, config(lpn[ActivityNode](nc.Activity.Enabled, activityDuration, increment(&nodeIndex)), nc.Activity.Excluded))
+
+	situationalQuestionDuration := min(7)
+	if lessonDuration < min(35) {
+		situationalQuestionDuration = min(5)
+	}
+	practiceConfigs = append(practiceConfigs, config(lpn[SituationalQuestionNode](nc.SituationalQuestionNode.Enabled, situationalQuestionDuration, increment(&nodeIndex)), nc.SituationalQuestionNode.Excluded))
+
+	misconceptionQuestionDuration := min(7)
+	if lessonDuration < min(35) {
+		misconceptionQuestionDuration = min(5)
+	}
+	practiceConfigs = append(practiceConfigs, config(lpn[MisconceptionQuestionNode](nc.MisconceptionQuestionNode.Enabled, misconceptionQuestionDuration, increment(&nodeIndex)), nc.MisconceptionQuestionNode.Excluded))
+
+	practiceConfigs = append(practiceConfigs,
+		group(nc.WrapUpExercise.Enabled, LessonPlanNodeGroupWrapUpExercise, []*LessonPlanNodeConfig{
+			func() *LessonPlanNodeConfig {
+				contemplative := lpn[ContemplativeQuestionNode](nc.ContemplativeQuestionNode.Enabled, sec(120), increment(&nodeIndex))
+				contemplative.Difficulty = DifficultyMild
+				return config(contemplative, nc.ContemplativeQuestionNode.Excluded)
+			}(),
+			config(lpn[ThoughtSparkerNode](nc.ThoughtSparkerNode.Enabled, sec(150), increment(&nodeIndex)), nc.ThoughtSparkerNode.Excluded),
+			config(lpn[ExitTicketNode](nc.ExitTicketNode.Enabled, sec(120), increment(&nodeIndex)), nc.ExitTicketNode.Excluded),
+		}, true))
+
+	// Filter out excluded configs
+	enabledIntroConfigs := LessonPlanConfigs{}
+	for _, cfg := range introConfigs {
+		if !cfg.IsExcluded() {
+			enabledIntroConfigs = append(enabledIntroConfigs, cfg)
+		}
+	}
+
+	enabledPracticeConfigs := LessonPlanConfigs{}
+	for _, cfg := range practiceConfigs {
+		if !cfg.IsExcluded() {
+			enabledPracticeConfigs = append(enabledPracticeConfigs, cfg)
+		}
+	}
+
+	return &SectionConfigs{
+		IntroductionConfigs: SectionConfig{
+			LessonPlanConfigs: enabledIntroConfigs,
+		},
+		PracticeConfigs: SectionConfig{
+			LessonPlanConfigs: enabledPracticeConfigs,
+		},
+	}
+}
+
+type NodeStatus struct {
+	Excluded bool
+	Enabled  bool
+}
+type nodeConfigsToInclude struct {
+	ThoughtSparkerNode             NodeStatus
+	WarmUpQuestionsNode            NodeStatus
+	WarmUpQuestionsWithContextNode NodeStatus
+	ApplicationNode                NodeStatus
+	LessonStarter                  NodeStatus
+	Skills                         NodeStatus
+	LessonAgenda                   NodeStatus
+	LearningGoals                  NodeStatus
+	ContemplativeQuestionNode      NodeStatus
+	ExitTicketNode                 NodeStatus
+	Activity                       NodeStatus
+	WrapUpExercise                 NodeStatus
+	SituationalQuestionNode        NodeStatus
+	MisconceptionQuestionNode      NodeStatus
+	IntroductionNode               NodeStatus
+}
+
+var (
+	includedAndEnabled  = NodeStatus{Enabled: true}
+	includedButDisabled = NodeStatus{Enabled: false}
+	excludedAndDisabled = NodeStatus{Excluded: true}
+)
+
+func (l *CreateLessonPlanInput) GetLessonConfigs() ([]*SectionConfigs, error) {
+	configs := make([]*SectionConfigs, len(l.Durations))
+
+	nodeConfig := nodeConfigsToInclude{}
+	for _, node := range l.IncludeNodes {
+		switch node {
+		case LessonPlanNodeTypeThoughtSparker:
+			nodeConfig.ThoughtSparkerNode = includedAndEnabled
+		case LessonPlanNodeTypeWarmUpQuestions:
+			nodeConfig.WarmUpQuestionsNode = includedAndEnabled
+		case LessonPlanNodeTypeWarmUpQuestionsWithContext:
+			nodeConfig.WarmUpQuestionsWithContextNode = includedAndEnabled
+		case LessonPlanNodeTypeApplication:
+			nodeConfig.ApplicationNode = includedAndEnabled
+		case LessonPlanNodeTypeLessonAgenda:
+			nodeConfig.LessonAgenda = includedAndEnabled
+		case LessonPlanNodeTypeLearningGoals:
+			nodeConfig.LearningGoals = includedAndEnabled
+		case LessonPlanNodeTypeContemplativeQuestion:
+			nodeConfig.ContemplativeQuestionNode = includedAndEnabled
+		case LessonPlanNodeTypeActivity:
+			nodeConfig.Activity = includedAndEnabled
+		case LessonPlanNodeTypeExitTicket:
+			nodeConfig.ExitTicketNode = includedAndEnabled
+		case LessonPlanNodeTypeSituationalQuestion:
+			nodeConfig.SituationalQuestionNode = includedAndEnabled
+		case LessonPlanNodeTypeMisconceptionQuestion:
+			nodeConfig.MisconceptionQuestionNode = includedAndEnabled
+		case LessonPlanNodeTypeIntroduction:
+			nodeConfig.IntroductionNode = includedAndEnabled
+		}
+	}
+
+	// always keep the lesson starter and wrap up exercise nodes in disabled state
+	// and toggle it later if included
+	nodeConfig.LessonStarter = excludedAndDisabled
+	nodeConfig.WrapUpExercise = excludedAndDisabled
+
+	for lessonIndex, duration := range l.Durations {
+		nc := nodeConfig
+
+		// we assign the skills uniformly to the lessons. So if the lesson index is less than the number of skills,
+		// we have enough skills to assign to the lesson
+		enoughSkills := len(l.SkillIDs) > lessonIndex
+		nc.Skills = NodeStatus{Enabled: enoughSkills}
+		if !nc.Skills.Enabled {
+			nc.LessonAgenda = includedButDisabled
+			nc.LearningGoals = includedButDisabled
+		}
+
+		// include application node and introduction node only in the first lesson
+		if lessonIndex != 0 {
+			nc.ApplicationNode = excludedAndDisabled
+			nc.ThoughtSparkerNode = excludedAndDisabled
+			nc.IntroductionNode = excludedAndDisabled
+		}
+
+		// include the following only in the last lesson
+		if lessonIndex != len(l.Durations)-1 {
+			nc.Activity = excludedAndDisabled
+			nc.SituationalQuestionNode = excludedAndDisabled
+		}
+
+		// include node only in even number periods (2nd, 4th, etc.)
+		// unless there's only one period
+		if len(l.Durations) > 1 && lessonIndex%2 != 0 {
+			nc.MisconceptionQuestionNode = excludedAndDisabled
+		}
+		sectionConfigs := sectionConfigs(nc, duration)
+		if duration == 0 {
+			sectionConfigs.SetDuration(0)
+		} else {
+			introductionDuration := sectionConfigs.IntroductionConfigs.LessonPlanConfigs.TotalDuration()
+			practiceDuration := sectionConfigs.PracticeConfigs.LessonPlanConfigs.TotalDuration()
+			sectionConfigs.IntroductionConfigs.Duration = introductionDuration
+			sectionConfigs.PracticeConfigs.Duration = practiceDuration
+			sectionConfigs.FlexDurations(duration)
+		}
+		configs[lessonIndex] = sectionConfigs
+	}
+	return configs, nil
+}
+
+func sec(n int) time.Duration {
+	return time.Duration(n) * time.Second
+}
+
+func min(n int) time.Duration {
+	return time.Duration(n) * time.Minute
+}
+
+func config(lpn LessonPlanNode, excluded bool) *LessonPlanNodeConfig {
+	node := neogo.Node{ID: id.MustNew()}
+	return &LessonPlanNodeConfig{
+		Node:           node,
+		LessonPlanNode: lpn,
+		CanToggle:      true,
+		Excluded:       excluded,
+	}
+}
+
+func group(enabled bool, groupType LessonPlanNodeGroupType, lpns []*LessonPlanNodeConfig, canToggle bool) *LessonPlanGroupConfig {
+	node := neogo.Node{ID: id.MustNew()}
+	var (
+		groupDuration time.Duration
+		nodes         []LessonPlanNodeConfig
+	)
+	for _, lpn := range lpns {
+		duration := lpn.Base().Duration
+		groupDuration += duration
+		lpn.GroupDuration = &duration
+		nodes = append(nodes, *lpn)
+	}
+	return &LessonPlanGroupConfig{
+		LessonPlanNodeGroup: LessonPlanNodeGroup{
+			Enabled:  enabled,
+			Node:     node,
+			Type:     groupType,
+			Duration: groupDuration,
+		},
+		Nodes:     nodes,
+		CanToggle: canToggle,
+	}
+}
+
+func lpn[N any, PN interface {
+	LessonPlanNode
+	*N
+}](enabled bool, duration time.Duration, index int, modifiers ...func(PN),
+) PN {
+	node := PN(new(N))
+	base := node.Base()
+	base.SetID(id.MustNew())
+	base.Enabled = enabled
+	base.Duration = duration
+	base.Index = index
+	nodeType := reflect.TypeOf(node)
+	base.Type = lpnTypeMap[nodeType]
+	for _, m := range modifiers {
+		m(node)
+	}
+	return node
+}
+
+func (n LessonPlanConfigs) FlexToDuration(desiredDuration time.Duration) (err error) {
+	var totalDuration, flexibleDuration time.Duration
+	flexibleNodes := map[int]time.Duration{}
+	allNodeConfigs := map[int]*LessonPlanNodeConfig{}
+	i := -1
+	for _, config := range n {
+		// GroupConfigs
+		if gc, ok := config.(*LessonPlanGroupConfig); ok {
+			for _, node := range gc.Nodes {
+				i++
+				allNodeConfigs[i] = &node
+			}
+
+			if gc.IsEnabled() {
+				totalDuration += gc.Duration
+				var enabledGD time.Duration
+				for _, node := range gc.Nodes {
+					if node.IsEnabled() {
+						enabledGD += *node.GroupDuration
+					}
+				}
+				if enabledGD == 0 {
+					continue
+				}
+				for _, node := range gc.Nodes {
+					if !node.IsEnabled() {
+						continue
+					}
+					ratio := float64(*node.GroupDuration) / float64(enabledGD)
+					duration := ratio * float64(gc.Duration)
+					node.Base().Duration = time.Duration(duration)
+				}
+			}
+		}
+
+		// NodeConfigs
+		if nc, ok := config.(*LessonPlanNodeConfig); ok {
+			i++
+			allNodeConfigs[i] = nc
+			if !nc.IsEnabled() {
+				continue
+			}
+			lpnDuration := nc.Base().Duration
+			totalDuration += lpnDuration
+			if nc.FlexibleFromDuration != nil {
+				flexibleDuration += lpnDuration
+				flexibleNodes[i] = lpnDuration
+			}
+		}
+	}
+
+	flex := func(
+		flexibleNodes map[int]time.Duration,
+		total, flexible, flexTo time.Duration,
+	) error {
+		remaining := flexTo - total
+		if len(flexibleNodes) == 0 {
+			return nil
+		}
+		lastIdx := 0
+		for i, d := range flexibleNodes {
+			var ratio time.Duration
+			if flexible == 0 {
+				ratio = 1
+			} else {
+				ratio = d / flexible
+			}
+			delta := (flexTo - total) * ratio
+			allNodeConfigs[i].Base().Duration += delta
+			if allNodeConfigs[i].Base().Duration < *allNodeConfigs[i].FlexibleFromDuration {
+				return ErrReduceDurationBeyondConfigMinimum
+			}
+			remaining -= delta
+			lastIdx = i
+		}
+		if remaining > 0 {
+			allNodeConfigs[lastIdx].Base().Duration += remaining
+		}
+		return nil
+	}
+	return flex(flexibleNodes, totalDuration, flexibleDuration, desiredDuration)
+}
+
+func (n LessonPlanConfigs) TotalDuration() time.Duration {
+	sum := time.Duration(0)
+	for _, config := range n {
+		if gc, ok := config.(*LessonPlanGroupConfig); ok {
+			if !gc.Enabled {
+				continue
+			}
+			sum += gc.Duration
+		} else if nc, ok := config.(*LessonPlanNodeConfig); ok {
+			if !nc.Base().Enabled {
+				continue
+			}
+			sum += nc.Base().Duration
+		}
+	}
+	return sum
+}
+
+func (n LessonPlanConfigs) EnabledNodes() []LessonPlanNode {
+	nodes := []LessonPlanNode{}
+	for _, config := range n {
+		if gc, ok := config.(*LessonPlanGroupConfig); ok {
+			for _, node := range gc.Nodes {
+				if !node.Base().Enabled {
+					continue
+				}
+				nodes = append(nodes, node.LessonPlanNode)
+			}
+		} else if nc, ok := config.(*LessonPlanNodeConfig); ok {
+			if !nc.Base().Enabled {
+				continue
+			}
+			nodes = append(nodes, nc.LessonPlanNode)
+		}
+	}
+	return nodes
+}
+
+func (n LessonPlanConfigs) Nodes() []LessonPlanNode {
+	nodes := []LessonPlanNode{}
+	for _, config := range n {
+		if gc, ok := config.(*LessonPlanGroupConfig); ok {
+			for _, node := range gc.Nodes {
+				nodes = append(nodes, node.LessonPlanNode)
+			}
+		} else if nc, ok := config.(*LessonPlanNodeConfig); ok {
+			nodes = append(nodes, nc.LessonPlanNode)
+		}
+	}
+	return nodes
+}
+
+func (n LessonPlanConfigs) NodeConfigs() []LessonPlanNodeConfig {
+	configs := []LessonPlanNodeConfig{}
+	for _, config := range n {
+		if gc, ok := config.(*LessonPlanGroupConfig); ok {
+			configs = append(configs, gc.Nodes...)
+		} else if nc, ok := config.(*LessonPlanNodeConfig); ok {
+			configs = append(configs, *nc)
+		}
+	}
+	return configs
+}
+
+func (n LessonPlanConfigs) GroupConfigs() []LessonPlanGroupConfig {
+	groupConfigs := []LessonPlanGroupConfig{}
+	for _, config := range n {
+		if gc, ok := config.(*LessonPlanGroupConfig); ok {
+			groupConfigs = append(groupConfigs, *gc)
+		}
+	}
+	return groupConfigs
+}
+
+type WorksheetPlanConfiguration struct {
+	neogo.Node `neo4j:"WorksheetPlanConfiguration"`
+	CreatedAt  *time.Time `json:"createdAt,omitempty"`
+	UpdatedAt  *time.Time `json:"updatedAt,omitempty"`
+
+	Type                      resource.WorksheetPlanType `json:"type"`
+	QuestionCount             int                        `json:"questionCount"`
+	AverageQuestionDifficulty float64                    `json:"averageQuestionDifficulty"`
+	WorkingOutSpaceEnabled    bool                       `json:"workingOutSpaceEnabled"`
+	ReducePaperEnabled        bool                       `json:"reducePaperEnabled"`
+	WorksheetLength           int                        `json:"worksheetLength"`
+	TextSize                  int                        `json:"textSize"`
+	ImageSize                 int                        `json:"imageSize"`
+	SectionHeadersEnabled     bool                       `json:"sectionHeadersEnabled"`
+	QuestionDifficultyEnabled bool                       `json:"questionDifficultyEnabled"`
+	ShowAnswerArea            bool                       `json:"showAnswerArea"`
+	ShowClassName             bool                       `json:"showClassName"`
+	ExplanationSpace          int                        `json:"explanationSpace"`
+	QuestionTypeEnabled       bool                       `json:"questionTypeEnabled"`
+	AnswersEnabled            bool                       `json:"answersEnabled"`
+	MultiQuestionCount        int                        `json:"multiQuestionCount"`
+	ShortAnswerQuestionCount  int                        `json:"shortAnswerQuestionCount"`
+	OpenEndedQuestionCount    int                        `json:"openEndedQuestionCount"`
+	NodeCounts                map[LessonPlanNodeType]int `json:"-"`
+	MaxDifficulty             *int                       `json:"maxDifficulty"`
+	MinDifficulty             *int                       `json:"minDifficulty"`
+}
+
+type worksheetNodeConfigsToInclude struct {
+	ScaffoldedQuestionNode int
+}
+
+type WorksheetSectionConfigs struct {
+	IntroductionConfigs SectionConfig `json:"introductionConfigs"`
+	EnablingConfigs     SectionConfig `json:"enablingConfigs"`
+	ExtensionConfigs    SectionConfig `json:"extensionConfigs"`
+	// list of nodes to be added under each skill section
+	// eg for enabling/extension worksheet plan types
+	NodeConfigsForSkillSections [][]LessonPlanNodeConfig `json:"-"`
+}
+
+type WorksheetPlanSectionType string
+
+const (
+	WorksheetPlanSectionTypeIntroduction WorksheetPlanSectionType = "IntroductionSection"
+	WorksheetPlanSectionTypeEnabling     WorksheetPlanSectionType = "EnablingSection"
+	WorksheetPlanSectionTypeExtension    WorksheetPlanSectionType = "ExtensionSection"
+	WorksheetPlanSectionTypeSkill        WorksheetPlanSectionType = "SkillSection"
+)
+
+var OrderedWorksheetSectionTypes = []WorksheetPlanSectionType{
+	WorksheetPlanSectionTypeIntroduction,
+	WorksheetPlanSectionTypeEnabling,
+	WorksheetPlanSectionTypeExtension,
+	WorksheetPlanSectionTypeSkill,
+}
+
+type WorksheetPlanSectionConfigsInput struct {
+	NodeType   LessonPlanNodeType
+	Difficulty Difficulty
+	Count      int
+	Type       WorksheetPlanSectionType
+}
+
+func WorksheetPlanSectionConfigs(nodeConfigs []WorksheetPlanSectionConfigsInput) *WorksheetSectionConfigs {
+	nodeIndex := -1
+	defaultDuration := min(7)
+	var (
+		introductionConfigs LessonPlanConfigs
+		enablingConfigs     LessonPlanConfigs
+		extensionConfigs    LessonPlanConfigs
+	)
+
+	addQuestionToSection := func(configs *LessonPlanConfigs, count int, difficulty Difficulty) {
+		for range count {
+			node := lpn[ScaffoldedQuestionNode](true, defaultDuration, increment(&nodeIndex))
+			node.Difficulty = difficulty
+			*configs = append(*configs, config(node, true))
+		}
+	}
+
+	for _, nc := range nodeConfigs {
+		switch nc.NodeType {
+		case LessonPlanNodeTypeScaffoldedQuestion:
+			switch nc.Type {
+			case WorksheetPlanSectionTypeEnabling:
+				addQuestionToSection(&enablingConfigs, nc.Count, nc.Difficulty)
+			case WorksheetPlanSectionTypeExtension:
+				addQuestionToSection(&extensionConfigs, nc.Count, nc.Difficulty)
+			}
+		case LessonPlanNodeTypeLearningGoals:
+			for range nc.Count {
+				node := lpn[LearningGoalsNode](true, min(2), increment(&nodeIndex))
+				introductionConfigs = append(introductionConfigs, config(node, true))
+			}
+		}
+	}
+
+	return &WorksheetSectionConfigs{
+		IntroductionConfigs: SectionConfig{
+			LessonPlanConfigs: introductionConfigs,
+		},
+		EnablingConfigs: SectionConfig{
+			LessonPlanConfigs: enablingConfigs,
+		},
+		ExtensionConfigs: SectionConfig{
+			LessonPlanConfigs: extensionConfigs,
+		},
+	}
+}
+
+func (l *CreateLessonPlanInput) GetWorksheetConfigs(regeneration bool) ([]*WorksheetSectionConfigs, error) {
+	if !lo.Contains(resource.WroksheetPlanTypes, l.WorksheetPlanConfiguration.Type) {
+		return nil, oops.Errorf("unsupported worksheet plan type: %s", l.WorksheetPlanConfiguration.Type)
+	}
+	switch l.WorksheetPlanConfiguration.Type {
+	case resource.WorksheetPlanTypeEnabling, resource.WorksheetPlanTypeExtension:
+		return l.GetEnablingExtensionWorksheetConfigs()
+	default:
+		return l.GetStandardWorksheetConfigs(regeneration)
+	}
+}
+
+func (l *CreateLessonPlanInput) GetStandardWorksheetConfigs(regeneration bool) ([]*WorksheetSectionConfigs, error) {
+	nodeConfig := worksheetNodeConfigsToInclude{}
+	for nodeType, count := range l.WorksheetPlanConfiguration.NodeCounts {
+		if nodeType == LessonPlanNodeTypeScaffoldedQuestion {
+			nodeConfig.ScaffoldedQuestionNode = count
+		}
+	}
+
+	configs := make([]*WorksheetSectionConfigs, len(l.Durations))
+
+	wpc := l.WorksheetPlanConfiguration
+	minDiff, maxDiff := WorksheetEditDifficultyEnabling, WorksheetEditDifficultyExt
+	if regeneration {
+		minDiff, maxDiff = WorksheetEditDifficultyEasy, WorksheetEditDifficultyMedium
+	}
+	includeEnabling := wpc.MinDifficulty == nil || *wpc.MinDifficulty <= int(minDiff)
+	includeExtension := wpc.MaxDifficulty == nil || *wpc.MaxDifficulty >= int(maxDiff)
+
+	createSectionConfig := CreateWorksheetConfigCreator(nodeConfig.ScaffoldedQuestionNode, ConfigCreatorOptions{
+		IncludeEnabling:  includeEnabling,
+		IncludeExtension: includeExtension,
+		MinDifficulty:    wpc.MinDifficulty,
+		MaxDifficulty:    wpc.MaxDifficulty,
+	})
+
+	for lessonIndex := range l.Durations {
+		nodeConfigs := []WorksheetPlanSectionConfigsInput{
+			{NodeType: LessonPlanNodeTypeLearningGoals, Count: 1},
+			createSectionConfig(WorksheetPlanSectionTypeEnabling),
+			createSectionConfig(WorksheetPlanSectionTypeExtension),
+		}
+		configs[lessonIndex] = WorksheetPlanSectionConfigs(nodeConfigs)
+	}
+	return configs, nil
+}
+
+func (l *CreateLessonPlanInput) GetEnablingExtensionWorksheetConfigs() ([]*WorksheetSectionConfigs, error) {
+	nodeConfigs := [][]LessonPlanNodeConfig{}
+	defaultDuration := min(7)
+	nodeIndex := -1
+	introductionConfigs := LessonPlanConfigs{
+		config(lpn[LearningGoalsNode](true, min(2), increment(&nodeIndex)), true),
+	}
+	skillSectionCount := len(l.SkillIDs)
+	scaffoldedCount := l.WorksheetPlanConfiguration.NodeCounts[LessonPlanNodeTypeScaffoldedQuestion]
+	baseCount := scaffoldedCount / skillSectionCount
+	remainderCount := scaffoldedCount % skillSectionCount
+	difficulty := DifficultyEnabling
+	if l.WorksheetPlanConfiguration.Type == resource.WorksheetPlanTypeExtension {
+		difficulty = DifficultyExtension
+	}
+	for i := 0; i < skillSectionCount; i++ {
+		nodeConfigs = append(nodeConfigs, []LessonPlanNodeConfig{})
+		// give each section the "base" count,
+		scaffoldedQuestionCount := baseCount
+		// and one extra for the last rem sections
+		if i >= skillSectionCount-remainderCount {
+			scaffoldedQuestionCount++
+		}
+		for j := 0; j < scaffoldedQuestionCount; j++ {
+			node := lpn[ScaffoldedQuestionNode](true, defaultDuration, increment(&nodeIndex))
+			node.Difficulty = difficulty
+			nodeConfigs[i] = append(nodeConfigs[i], *config(node, true))
+		}
+	}
+	return []*WorksheetSectionConfigs{
+		{
+			IntroductionConfigs: SectionConfig{
+				LessonPlanConfigs: introductionConfigs,
+			},
+			NodeConfigsForSkillSections: nodeConfigs,
+		},
+	}, nil
+}
+
+type GetFallbackAIQuestionInput struct {
+	Type       question.LessonPlanQuestionType
+	Difficulty Difficulty
+	Index      int
+}
+
+type FallbackAIQuestionNodes struct {
+	Configs      *WorksheetSectionConfigs
+	Indices      []int
+	Difficulties []Difficulty
+	Types        []question.LessonPlanQuestionType
+}
+
+func GetFallbackAIQuestionNodesConfig(questions []GetFallbackAIQuestionInput, preferMultiChoice bool) FallbackAIQuestionNodes {
+	nodes := []LessonPlanNodeConfig{}
+	types := []question.LessonPlanQuestionType{}
+
+	createAndAppendNode := func(nodeType interface{}, difficulty Difficulty) {
+		switch nodeType.(type) {
+		case *MultipleChoiceQuestionNode:
+			node := lpn[MultipleChoiceQuestionNode](true, sec(120), 0)
+			node.Difficulty = difficulty
+			nodes = append(nodes, *config(node, true))
+			types = append(types, question.LessonPlanQuestionTypeMultipleChoice)
+		case *ShortAnswerQuestionNode:
+			node := lpn[ShortAnswerQuestionNode](true, sec(120), 0)
+			node.Difficulty = difficulty
+			nodes = append(nodes, *config(node, true))
+			types = append(types, question.LessonPlanQuestionTypeShortAnswer)
+		case *ContemplativeQuestionNode:
+			node := lpn[ContemplativeQuestionNode](true, sec(120), 0)
+			node.Difficulty = difficulty
+			nodes = append(nodes, *config(node, true))
+			types = append(types, question.LessonPlanQuestionTypeOpenEnded)
+		}
+	}
+
+	for _, q := range questions {
+		switch q.Type {
+		case question.LessonPlanQuestionTypeShortAnswer:
+			if preferMultiChoice {
+				createAndAppendNode((*MultipleChoiceQuestionNode)(nil), q.Difficulty)
+			} else {
+				createAndAppendNode((*ShortAnswerQuestionNode)(nil), q.Difficulty)
+			}
+		case question.LessonPlanQuestionTypeMultipleChoice:
+			createAndAppendNode((*MultipleChoiceQuestionNode)(nil), q.Difficulty)
+		case question.LessonPlanQuestionTypeOpenEnded:
+			createAndAppendNode((*ContemplativeQuestionNode)(nil), q.Difficulty)
+		}
+	}
+
+	return FallbackAIQuestionNodes{
+		Configs: &WorksheetSectionConfigs{
+			NodeConfigsForSkillSections: [][]LessonPlanNodeConfig{nodes},
+		},
+		Indices:      lo.Map(questions, func(q GetFallbackAIQuestionInput, _ int) int { return q.Index }),
+		Difficulties: lo.Map(questions, func(q GetFallbackAIQuestionInput, _ int) Difficulty { return q.Difficulty }),
+		Types:        types,
+	}
+}
+
+type ConfigCreatorOptions struct {
+	IncludeEnabling  bool
+	IncludeExtension bool
+	CustomDifficulty *Difficulty
+	MinDifficulty    *int
+	MaxDifficulty    *int
+}
+
+func CreateWorksheetConfigCreator(totalCount int, options ConfigCreatorOptions) func(WorksheetPlanSectionType) WorksheetPlanSectionConfigsInput {
+	calculateCount := func(sectionType WorksheetPlanSectionType) int {
+		switch {
+		case options.IncludeEnabling && options.IncludeExtension:
+			half := totalCount / 2
+			if sectionType == WorksheetPlanSectionTypeEnabling {
+				return half + totalCount%2
+			}
+			return half
+		case options.IncludeEnabling && sectionType == WorksheetPlanSectionTypeEnabling:
+			return totalCount
+		case options.IncludeExtension && sectionType == WorksheetPlanSectionTypeExtension:
+			return totalCount
+		default:
+			return 0
+		}
+	}
+
+	getDifficulty := func(sectionType WorksheetPlanSectionType) Difficulty {
+		if options.CustomDifficulty != nil {
+			return *options.CustomDifficulty
+		}
+
+		minDifficulty, maxDifficulty := DifficultyEnabling, DifficultyExtension
+		// Convert worksheet difficulties if provided
+		convertDifficulty := func(worksheetDiff *int) (Difficulty, error) {
+			if worksheetDiff == nil {
+				return "", fmt.Errorf("nil difficulty")
+			}
+			return WorksheetEditDifficulty(*worksheetDiff).ToLessonPlanDifficulty()
+		}
+		if diff, err := convertDifficulty(options.MinDifficulty); err == nil {
+			minDifficulty = diff
+		}
+		if diff, err := convertDifficulty(options.MaxDifficulty); err == nil {
+			maxDifficulty = diff
+		}
+
+		if sectionType == WorksheetPlanSectionTypeExtension {
+			return maxDifficulty
+		}
+		return minDifficulty
+	}
+
+	return func(sectionType WorksheetPlanSectionType) WorksheetPlanSectionConfigsInput {
+		return WorksheetPlanSectionConfigsInput{
+			Type:       sectionType,
+			NodeType:   LessonPlanNodeTypeScaffoldedQuestion,
+			Difficulty: getDifficulty(sectionType),
+			Count:      calculateCount(sectionType),
+		}
+	}
+}
+
+func increment(i *int) int {
+	*i = *i + 1
+	return *i
+}
+
+// api/lesson_plan/edges.go
+package lessonplan
+
+import (
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+)
+
+type UserCreatedLessonPlanEdge struct {
+	edge.Edge `neo4j:"CREATED"`
+}
+
+type LessonPlanPlansLessonEdge struct {
+	edge.Edge `neo4j:"PLANS"`
+	Index     int `json:"index"`
+}
+
+type LessonContainsLessonSectionEdge struct {
+	edge.Edge `neo4j:"CONTAINS"`
+	Index     int `json:"index"`
+}
+
+type LessonSectionIncludesLessonPlanNodeEdge struct {
+	edge.Edge `neo4j:"INCLUDES"`
+	Index     int `json:"index"`
+}
+
+type LessonPlanSkillSectionHasSkillEdge struct {
+	edge.Edge `neo4j:"HAS"`
+}
+
+type LessonPlanNodeConfigForLessonPlanNodeEdge struct {
+	edge.Edge `neo4j:"FOR"`
+}
+
+type LessonPlanGroupConfigForLessonPlanNodeEdge struct {
+	edge.Edge `neo4j:"FOR"`
+}
+
+type LessonPlanForTopicEdge struct {
+	edge.Edge `neo4j:"FOR"`
+}
+
+type LessonPlanForSubtopicEdge struct {
+	edge.Edge `neo4j:"FOR"`
+}
+
+type LessonPlanForYearEdge struct {
+	edge.Edge `neo4j:"FOR"`
+}
+
+type LessonTaughtSkillEdge struct {
+	edge.Edge `neo4j:"TAUGHT"`
+}
+
+type LessonFlaggedSkillEdge struct {
+	edge.Edge `neo4j:"FLAGGED"`
+}
+
+type LessonPlanNodePromptsLessonPlanQuestionEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+	Index     int `json:"index"`
+}
+
+type LessonPlanApplicationNodePromptsLessonPlanApplicationContentEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+}
+
+type LessonPlanActivityNodePromptsLessonPlanActivityContentEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+}
+
+type LessonPlanSituationalQuestionNodePromptsSituationalQuestionContentEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+}
+
+type LessonPlanWarmUpQuestionsWithContextNodePromptsWarmUpQuestionsWithContextContentEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+}
+
+type LessonPlanScaffoldedQuestionNodePromptsScaffoldedQuestionContentEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+}
+
+type LessonPlanMultipleChoiceQuestionNodePromptsMultipleChoiceQuestionContentEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+}
+
+type LessonPlanShortAnswerQuestionNodePromptsShortAnswerQuestionContentEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+}
+
+type LessonPlanMisconceptionQuestionNodePromptsMisconceptionContentEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+}
+
+type SubtopicHasLessonPlanContextEdge struct {
+	edge.Edge `neo4j:"HAS"`
+}
+
+type LessonPlanStreamPromptsQuestionEdge struct {
+	edge.Edge `neo4j:"PROMPTS"`
+	Order     int `json:"order"`
+}
+
+type LessonPlanSelectedLessonPlanContext struct {
+	edge.Edge `neo4j:"SELECTED"`
+}
+
+// There is no functional use of index, its copied from the includes edge of the node
+type LessonPlanSelectedLessonPlanNodeEdge struct {
+	edge.Edge `neo4j:"SELECTED"`
+	Index     int `json:"index"`
+}
+
+type LessonPlanNodeInGroupLessonPlanNodeGroupNodeEdge struct {
+	edge.Edge `neo4j:"IN_GROUP"`
+}
+
+type LessonTaughtLessonPlanNodeEdge struct {
+	edge.Edge `neo4j:"TAUGHT"`
+}
+
+type SubtopicRefersBaselineActivityEdge struct {
+	edge.Edge `neo4j:"REFERS"`
+}
+
+type SubtopicRefersThoughtSparkerReferenceEdge struct {
+	edge.Edge `neo4j:"REFERS"`
+}
+
+type SubtopicRefersContemplativeQuestionReferenceEdge struct {
+	edge.Edge `neo4j:"REFERS"`
+}
+
+type LessonPlanSkillUsesSkillEdge struct {
+	edge.Edge `neo4j:"USES"`
+}
+
+type LessonPlanSkillForStudentQuestionSetEdge struct {
+	edge.Edge `neo4j:"FOR_STUDENT"`
+}
+
+type LessonPlanSkillForTeacherQuestionSetEdge struct {
+	edge.Edge `neo4j:"FOR_TEACHER"`
+}
+
+type QuestionSetIncludesQuestionEdge struct {
+	edge.Edge `neo4j:"INCLUDES"`
+}
+
+type LessonHasLessonWorksheetEdge struct {
+	edge.Edge `neo4j:"HAS"`
+}
+
+type LessonWorksheetContainsLessonPlanNodeEdge struct {
+	edge.Edge `neo4j:"CONTAINS"`
+	Index     int  `json:"index"`
+	Enabled   bool `json:"enabled"`
+}
+
+type UserOwnsLessonPlanEdge struct {
+	edge.Edge `neo4j:"OWNS"`
+}
+
+// api/lesson_plan/entity.go
+package lessonplan
+
+import (
+	"fmt"
+	"io"
+	"strconv"
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/common"
+	"github.com/MathGaps/resources/api/question"
+	"github.com/MathGaps/resources/api/resource"
+	"github.com/MathGaps/resources/api/skill"
+	"github.com/rlch/neogo"
+)
+
+type Lesson struct {
+	neogo.Node `neo4j:"Lesson"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	Duration        *time.Duration `json:"duration"`
+	Ready           bool           `json:"ready"`
+	ElapsedDuration time.Duration  `json:"elapsedDuration"`
+}
+
+func (Lesson) IsEntity() {}
+
+type LessonPlanState string
+
+const (
+	LessonPlanStatePreparing    LessonPlanState = "PREPARING"
+	LessonPlanStateReadyToTeach LessonPlanState = "READY_TO_TEACH"
+	LessonPlanStateTeaching     LessonPlanState = "TEACHING"
+	LessonPlanStateComplete     LessonPlanState = "COMPLETE"
+	LessonPlanStateReturnLater  LessonPlanState = "RETURN_LATER"
+)
+
+type LessonSection interface {
+	neogo.IAbstract
+	IsEntity()
+	IsLessonSection()
+	GetID() string
+	Base() *BaseSection
+}
+
+type BaseSection struct {
+	neogo.Abstract `neo4j:"LessonSection"`
+	neogo.Node
+	CreatedAt time.Time `json:"createdAt"`
+
+	Duration time.Duration `json:"duration"`
+}
+
+func (BaseSection) IsEntity()        {}
+func (BaseSection) IsLessonSection() {}
+func (l *BaseSection) Base() *BaseSection {
+	return l
+}
+
+func (l BaseSection) GetID() string {
+	return l.ID
+}
+
+type IntroductionSection struct {
+	BaseSection `neo4j:"IntroductionSection"`
+}
+
+// Deprecated: This will be removed in the future
+type TeachingSection struct {
+	BaseSection `neo4j:"TeachingSection"`
+}
+
+type SkillSection struct {
+	BaseSection `neo4j:"SkillSection"`
+	Enabled     bool `json:"enabled"` //* Hacky way to determine if the section is enabled and get the skills for the lesson plan
+}
+
+type PracticeSection struct {
+	BaseSection `neo4j:"PracticeSection"`
+}
+
+type EnablingSection struct {
+	BaseSection `neo4j:"EnablingSection"`
+}
+
+type ExtensionSection struct {
+	BaseSection `neo4j:"ExtensionSection"`
+}
+
+func (BaseSection) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&IntroductionSection{},
+		&TeachingSection{},
+		&PracticeSection{},
+		&SkillSection{},
+		&EnablingSection{},
+		&ExtensionSection{},
+	}
+}
+
+type LessonPlanNode interface {
+	neogo.IAbstract
+	TeachableLessonPlanNode
+	RegenerativeLessonPlanNode
+	EditableLessonPlanNode
+	Base() *BaseNode
+	IsEntity()
+	IsLessonPlanNode()
+	GetID() string
+}
+
+type LessonPlanCard interface {
+	LessonPlanNode
+	IsLessonPlanCardNode()
+	SetBaseCard(BaseCard)
+}
+
+type TeachableLessonPlanNode interface {
+	IsTeachableLessonPlanNode()
+}
+
+type LessonWorksheetNode interface {
+	LessonPlanNode
+	IsLessonWorksheetNode()
+}
+
+type BaseNode struct {
+	neogo.Abstract `neo4j:"LessonPlanNode"`
+	neogo.Node
+	CreatedAt time.Time `json:"createdAt"`
+
+	Title            *string            `json:"title,omitempty"`
+	Duration         time.Duration      `json:"duration"`
+	Enabled          bool               `json:"enabled"`
+	Ready            bool               `json:"ready"`
+	Context          *string            `json:"context,omitempty"`
+	Type             LessonPlanNodeType `json:"type"`
+	LastLessonID     *string            `json:"lastLessonID,omitempty"`
+	DefaultSectionID *string            `json:"defaultSectionID,omitempty"`
+	Dirty            bool               `json:"dirty"`
+
+	Index int `json:"-"`
+}
+
+type BaseCard struct {
+	BaseNode `neo4j:"LessonPlanCard"`
+	Title    string             `json:"title"`
+	Icon     common.IconMapType `json:"icon"`
+	Image    string             `json:"image"`
+}
+
+func (BaseNode) IsEntity()                     {}
+func (BaseNode) IsLessonPlanNode()             {}
+func (BaseNode) IsTeachableLessonPlanNode()    {}
+func (BaseNode) IsRegenerativeLessonPlanNode() {}
+func (BaseNode) IsEditableLessonPlanNode()     {}
+
+func (l *BaseNode) Base() *BaseNode {
+	return l
+}
+
+func (l BaseNode) GetID() string {
+	return l.ID
+}
+
+func (BaseNode) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&WarmUpQuestionsNode{},
+		&WarmUpQuestionsWithContextNode{},
+		&ThoughtSparkerNode{},
+		&ApplicationNode{},
+		&ActivityNode{},
+		&BrainTeaserNode{},
+		&MathsDebateNode{},
+		&SkillsNode{},
+		&LessonPlanSkill{},
+		&ExitTicketNode{},
+		&ContemplativeQuestionNode{},
+		&BlankNoteCardNode{},
+		&EmbedCardNode{},
+		&FileCardNode{},
+		&VideoCardNode{},
+		&GeogebraSimulationCardNode{},
+		&SlideCardNode{},
+		&LessonAgendaNode{},
+		&LearningGoalsNode{},
+		&StudentQuestionNode{},
+		&TeacherQuestionNode{},
+		&SkillSlideNode{},
+		&SituationalQuestionNode{},
+		&ScaffoldedQuestionNode{},
+		&MultipleChoiceQuestionNode{},
+		&ShortAnswerQuestionNode{},
+		&MisconceptionQuestionNode{},
+		&IntroductionNode{},
+	}
+}
+
+func (BaseCard) IsLessonPlanCardNode() {}
+
+func (BaseCard) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&BlankNoteCardNode{},
+		&EmbedCardNode{},
+		&FileCardNode{},
+		&VideoCardNode{},
+		&GeogebraSimulationCardNode{},
+		&SlideCardNode{},
+	}
+}
+
+// Ideally this would have a neo4j tag, but that causes issues in LessonPlanNode APIs
+// TODO: Refactor to use the multi polymorphism feature of neogo once implemented
+type BaseWorksheetNode struct {
+	BaseNode
+}
+
+func (BaseWorksheetNode) IsLessonWorksheetNode() {}
+
+func (BaseWorksheetNode) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&WarmUpQuestionsNode{},
+		&WarmUpQuestionsWithContextNode{},
+		&ThoughtSparkerNode{},
+		&BrainTeaserNode{},
+		&MathsDebateNode{},
+		&LessonPlanSkill{},
+		&ExitTicketNode{},
+		&ContemplativeQuestionNode{},
+		&SituationalQuestionNode{},
+		&ScaffoldedQuestionNode{},
+		&MultipleChoiceQuestionNode{},
+		&ShortAnswerQuestionNode{},
+		&LearningGoalsNode{},
+		&MisconceptionQuestionNode{},
+		&IntroductionNode{},
+	}
+}
+
+type (
+	Difficulty              string
+	LessonPlanNodeGroupType string
+	LessonPlanNodeType      string
+	SkillSlideTemplateType  string
+	IntroductionAlignment   string
+)
+
+const (
+	DifficultyEnabling  Difficulty = "ENABLING"
+	DifficultyMild      Difficulty = "MILD"
+	DifficultyHot       Difficulty = "HOT"
+	DifficultySpicy     Difficulty = "SPICY"
+	DifficultyExtension Difficulty = "EXTENSION"
+
+	LessonPlanNodeGroupLessonStarter  LessonPlanNodeGroupType = "LESSON_STARTER"
+	LessonPlanNodeGroupWrapUpExercise LessonPlanNodeGroupType = "WRAP_UP_EXERCISE"
+
+	LessonPlanNodeTypeApplication                LessonPlanNodeType = "APPLICATION"
+	LessonPlanNodeTypeBrainTeaser                LessonPlanNodeType = "BRAIN_TEASER"
+	LessonPlanNodeTypeMathsDebate                LessonPlanNodeType = "MATHS_DEBATE"
+	LessonPlanNodeTypeWarmUpQuestions            LessonPlanNodeType = "WARM_UP_QUESTIONS"
+	LessonPlanNodeTypeThoughtSparker             LessonPlanNodeType = "THOUGHT_SPARKER"
+	LessonPlanNodeTypeSkills                     LessonPlanNodeType = "SKILLS"
+	LessonPlanNodeTypeStudentQuestions           LessonPlanNodeType = "STUDENT_QUESTIONS"
+	LessonPlanNodeTypeTeacherQuestions           LessonPlanNodeType = "TEACHER_QUESTIONS"
+	LessonPlanNodeTypeSkillSlide                 LessonPlanNodeType = "SKILL_SLIDE"
+	LessonPlanNodeTypeExitTicket                 LessonPlanNodeType = "EXIT_TICKET"
+	LessonPlanNodeTypeContemplativeQuestion      LessonPlanNodeType = "CONTEMPLATIVE_QUESTION"
+	LessonPlanNodeTypeLessonAgenda               LessonPlanNodeType = "LESSON_AGENDA"
+	LessonPlanNodeTypeLearningGoals              LessonPlanNodeType = "LEARNING_GOALS"
+	LessonPlanNodeTypeActivity                   LessonPlanNodeType = "ACTIVITY"
+	LessonPlanNodeTypeSituationalQuestion        LessonPlanNodeType = "SITUATIONAL_QUESTION"
+	LessonPlanNodeTypeScaffoldedQuestion         LessonPlanNodeType = "SCAFFOLDED_QUESTION"
+	LessonPlanNodeTypeMultipleChoiceQuestion     LessonPlanNodeType = "MULTIPLE_CHOICE_QUESTION"
+	LessonPlanNodeTypeShortAnswerQuestion        LessonPlanNodeType = "SHORT_ANSWER_QUESTION"
+	LessonPlanNodeTypeMisconceptionQuestion      LessonPlanNodeType = "MISCONCEPTION_QUESTION"
+	LessonPlanNodeTypeWarmUpQuestionsWithContext LessonPlanNodeType = "WARM_UP_QUESTIONS_WITH_CONTEXT"
+	LessonPlanNodeTypeIntroduction               LessonPlanNodeType = "INTRODUCTION"
+	LessonPlanNodeTypeCard                       LessonPlanNodeType = "CARD"
+
+	SkillSlideTemplateTypeSkill SkillSlideTemplateType = "SKILL"
+	SkillSlideTemplateTypeNote  SkillSlideTemplateType = "NOTE"
+
+	IntroductionAlignmentTopLeft      IntroductionAlignment = "TOP_LEFT"
+	IntroductionAlignmentTopCenter    IntroductionAlignment = "TOP_CENTER"
+	IntroductionAlignmentTopRight     IntroductionAlignment = "TOP_RIGHT"
+	IntroductionAlignmentCenterLeft   IntroductionAlignment = "CENTER_LEFT"
+	IntroductionAlignmentCenter       IntroductionAlignment = "CENTER"
+	IntroductionAlignmentCenterRight  IntroductionAlignment = "CENTER_RIGHT"
+	IntroductionAlignmentBottomLeft   IntroductionAlignment = "BOTTOM_LEFT"
+	IntroductionAlignmentBottomCenter IntroductionAlignment = "BOTTOM_CENTER"
+	IntroductionAlignmentBottomRight  IntroductionAlignment = "BOTTOM_RIGHT"
+)
+
+var (
+	LessonPlanDifficulties    = []Difficulty{DifficultyMild, DifficultyHot, DifficultySpicy}
+	WorksheetPlanDifficulties = []Difficulty{DifficultyEnabling, DifficultyMild, DifficultyHot, DifficultySpicy, DifficultyExtension}
+
+	LessonGoalsTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeLearningGoals,
+		LessonPlanNodeTypeLessonAgenda,
+		LessonPlanNodeTypeIntroduction,
+	}
+	ContextIndependentAINodeTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeActivity,
+		LessonPlanNodeTypeContemplativeQuestion,
+		LessonPlanNodeTypeMultipleChoiceQuestion,
+		LessonPlanNodeTypeShortAnswerQuestion,
+	}
+
+	// nodes types that are enabled/disabled across selected lessons
+	LessonSpecificNodeTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeThoughtSparker,
+		LessonPlanNodeTypeApplication,
+		LessonPlanNodeTypeBrainTeaser,
+		LessonPlanNodeTypeMathsDebate,
+		LessonPlanNodeTypeLessonAgenda,
+		LessonPlanNodeTypeLearningGoals,
+		LessonPlanNodeTypeActivity,
+		LessonPlanNodeTypeSituationalQuestion,
+		LessonPlanNodeTypeScaffoldedQuestion,
+		LessonPlanNodeTypeMultipleChoiceQuestion,
+		LessonPlanNodeTypeShortAnswerQuestion,
+		LessonPlanNodeTypeMisconceptionQuestion,
+	}
+
+	// node types that are present only in the first lesson
+	LessonPlanNodeTypesFirstLesson = []LessonPlanNodeType{
+		LessonPlanNodeTypeApplication,
+		LessonPlanNodeTypeThoughtSparker,
+	}
+
+	// node types that are present only in the last lesson
+	LessonPlanNodeTypesLastLesson = []LessonPlanNodeType{
+		LessonPlanNodeTypeActivity,
+		LessonPlanNodeTypeSituationalQuestion,
+	}
+
+	LessonPlanNodeTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeApplication,
+		LessonPlanNodeTypeActivity,
+		LessonPlanNodeTypeBrainTeaser,
+		LessonPlanNodeTypeMathsDebate,
+		LessonPlanNodeTypeWarmUpQuestions,
+		LessonPlanNodeTypeThoughtSparker,
+		LessonPlanNodeTypeSkills,
+		LessonPlanNodeTypeExitTicket,
+		LessonPlanNodeTypeContemplativeQuestion,
+		LessonPlanNodeTypeLessonAgenda,
+		LessonPlanNodeTypeLearningGoals,
+		LessonPlanNodeTypeSituationalQuestion,
+		LessonPlanNodeTypeWarmUpQuestionsWithContext,
+		LessonPlanNodeTypeScaffoldedQuestion,
+		LessonPlanNodeTypeMultipleChoiceQuestion,
+		LessonPlanNodeTypeShortAnswerQuestion,
+		LessonPlanNodeTypeMisconceptionQuestion,
+		LessonPlanNodeTypeIntroduction,
+	}
+
+	WorksheetPlanNodeTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeLearningGoals,
+		LessonPlanNodeTypeStudentQuestions,
+		LessonPlanNodeTypeMultipleChoiceQuestion,
+		LessonPlanNodeTypeShortAnswerQuestion,
+		LessonPlanNodeTypeContemplativeQuestion,
+		LessonPlanNodeTypeScaffoldedQuestion,
+	}
+
+	WorksheetPlanQuestionNodeTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeStudentQuestions,
+		LessonPlanNodeTypeScaffoldedQuestion,
+		LessonPlanNodeTypeMultipleChoiceQuestion,
+		LessonPlanNodeTypeShortAnswerQuestion,
+		LessonPlanNodeTypeContemplativeQuestion,
+	}
+
+	AllowedMultipleNodeTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeIntroduction,
+		LessonPlanNodeTypeApplication,
+		LessonPlanNodeTypeWarmUpQuestions,
+		LessonPlanNodeTypeWarmUpQuestionsWithContext,
+		LessonPlanNodeTypeThoughtSparker,
+		LessonPlanNodeTypeBrainTeaser,
+		LessonPlanNodeTypeExitTicket,
+		LessonPlanNodeTypeContemplativeQuestion,
+		LessonPlanNodeTypeActivity,
+		LessonPlanNodeTypeSituationalQuestion,
+		LessonPlanNodeTypeScaffoldedQuestion,
+		LessonPlanNodeTypeMultipleChoiceQuestion,
+		LessonPlanNodeTypeShortAnswerQuestion,
+		LessonPlanNodeTypeLearningGoals,
+		LessonPlanNodeTypeLessonAgenda,
+		LessonPlanNodeTypeMisconceptionQuestion,
+	}
+
+	LessonWorksheetNonAINodeTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeLearningGoals,
+		LessonPlanNodeTypeStudentQuestions,
+		LessonPlanNodeTypeTeacherQuestions,
+	}
+
+	NonAINodetypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeLearningGoals,
+		LessonPlanNodeTypeLessonAgenda,
+		LessonPlanNodeTypeSkills,
+		LessonPlanNodeTypeSkillSlide,
+		LessonPlanNodeTypeStudentQuestions,
+		LessonPlanNodeTypeTeacherQuestions,
+		LessonPlanNodeTypeIntroduction,
+	}
+
+	BatchEnabledNodeTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeScaffoldedQuestion,
+		LessonPlanNodeTypeMultipleChoiceQuestion,
+		LessonPlanNodeTypeShortAnswerQuestion,
+		LessonPlanNodeTypeContemplativeQuestion,
+	}
+
+	AINodeTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeApplication,
+		LessonPlanNodeTypeActivity,
+		LessonPlanNodeTypeMathsDebate,
+		LessonPlanNodeTypeWarmUpQuestions,
+		LessonPlanNodeTypeThoughtSparker,
+		LessonPlanNodeTypeExitTicket,
+		LessonPlanNodeTypeContemplativeQuestion,
+		LessonPlanNodeTypeSituationalQuestion,
+		LessonPlanNodeTypeWarmUpQuestionsWithContext,
+		LessonPlanNodeTypeScaffoldedQuestion,
+		LessonPlanNodeTypeMultipleChoiceQuestion,
+		LessonPlanNodeTypeShortAnswerQuestion,
+		LessonPlanNodeTypeMisconceptionQuestion,
+	}
+
+	// NodeTypes with "mild, hot, spicy..." difficulty levels
+	MultipleDifficultyBasedNodeTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeWarmUpQuestions,
+		LessonPlanNodeTypeExitTicket,
+		LessonPlanNodeTypeSituationalQuestion,
+		LessonPlanNodeTypeWarmUpQuestionsWithContext,
+		LessonPlanNodeTypeScaffoldedQuestion,
+		LessonPlanNodeTypeMultipleChoiceQuestion,
+		LessonPlanNodeTypeShortAnswerQuestion,
+	}
+
+	// Node types that are affected by the AI Studio change nodes flow
+	LessonPlanChangeNodeTypes = []LessonPlanNodeType{
+		LessonPlanNodeTypeApplication,
+		LessonPlanNodeTypeActivity,
+		LessonPlanNodeTypeBrainTeaser,
+		LessonPlanNodeTypeMathsDebate,
+		LessonPlanNodeTypeWarmUpQuestions,
+		LessonPlanNodeTypeThoughtSparker,
+		LessonPlanNodeTypeSkills,
+		LessonPlanNodeTypeExitTicket,
+		LessonPlanNodeTypeContemplativeQuestion,
+		LessonPlanNodeTypeLessonAgenda,
+		LessonPlanNodeTypeLearningGoals,
+		LessonPlanNodeTypeSituationalQuestion,
+		LessonPlanNodeTypeWarmUpQuestionsWithContext,
+		LessonPlanNodeTypeScaffoldedQuestion,
+		LessonPlanNodeTypeMultipleChoiceQuestion,
+		LessonPlanNodeTypeShortAnswerQuestion,
+		LessonPlanNodeTypeMisconceptionQuestion,
+		LessonPlanNodeTypeStudentQuestions,
+		LessonPlanNodeTypeTeacherQuestions,
+		LessonPlanNodeTypeSkillSlide,
+	}
+)
+
+func NewLessonPlanNode(t LessonPlanNodeType) LessonPlanNode {
+	var n LessonPlanNode
+	switch t {
+	case LessonPlanNodeTypeIntroduction:
+		n = &IntroductionNode{}
+	case LessonPlanNodeTypeApplication:
+		n = &ApplicationNode{}
+	case LessonPlanNodeTypeActivity:
+		n = &ActivityNode{}
+	case LessonPlanNodeTypeBrainTeaser:
+		n = &BrainTeaserNode{}
+	case LessonPlanNodeTypeMathsDebate:
+		n = &MathsDebateNode{}
+	case LessonPlanNodeTypeWarmUpQuestions:
+		n = &WarmUpQuestionsNode{}
+	case LessonPlanNodeTypeWarmUpQuestionsWithContext:
+		n = &WarmUpQuestionsWithContextNode{}
+	case LessonPlanNodeTypeThoughtSparker:
+		n = &ThoughtSparkerNode{}
+	case LessonPlanNodeTypeExitTicket:
+		n = &ExitTicketNode{}
+	case LessonPlanNodeTypeContemplativeQuestion:
+		n = &ContemplativeQuestionNode{
+			Difficulty: DifficultyMild,
+		}
+	case LessonPlanNodeTypeLessonAgenda:
+		n = &LessonAgendaNode{}
+	case LessonPlanNodeTypeLearningGoals:
+		n = &LearningGoalsNode{}
+	case LessonPlanNodeTypeSituationalQuestion:
+		n = &SituationalQuestionNode{}
+	case LessonPlanNodeTypeScaffoldedQuestion:
+		n = &ScaffoldedQuestionNode{
+			Difficulty: DifficultyMild,
+		}
+	case LessonPlanNodeTypeMultipleChoiceQuestion:
+		n = &MultipleChoiceQuestionNode{}
+	case LessonPlanNodeTypeShortAnswerQuestion:
+		n = &ShortAnswerQuestionNode{}
+	case LessonPlanNodeTypeMisconceptionQuestion:
+		n = &MisconceptionQuestionNode{}
+	}
+	base := n.Base()
+	base.SetID(id.MustNew())
+	base.Type = t
+	return n
+}
+
+func (t LessonPlanNodeType) SectionLabel() string {
+	switch t {
+	case LessonPlanNodeTypeApplication, LessonPlanNodeTypeWarmUpQuestions, LessonPlanNodeTypeLearningGoals, LessonPlanNodeTypeLessonAgenda, LessonPlanNodeTypeWarmUpQuestionsWithContext, LessonPlanNodeTypeIntroduction:
+		return "IntroductionSection"
+	case LessonPlanNodeTypeContemplativeQuestion,
+		LessonPlanNodeTypeThoughtSparker,
+		LessonPlanNodeTypeExitTicket,
+		LessonPlanNodeTypeActivity,
+		LessonPlanNodeTypeMultipleChoiceQuestion,
+		LessonPlanNodeTypeShortAnswerQuestion,
+		LessonPlanNodeTypeSituationalQuestion,
+		LessonPlanNodeTypeScaffoldedQuestion,
+		LessonPlanNodeTypeMathsDebate,
+		LessonPlanNodeTypeMisconceptionQuestion:
+		return "PracticeSection"
+	case LessonPlanNodeTypeSkills, LessonPlanNodeTypeSkillSlide,
+		LessonPlanNodeTypeStudentQuestions, LessonPlanNodeTypeTeacherQuestions, LessonPlanNodeTypeBrainTeaser:
+		return "SkillSection"
+	default:
+		return ""
+	}
+}
+
+type WarmUpQuestionsNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanWarmUpQuestions"`
+}
+
+type WarmUpQuestionsWithContextNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanWarmUpQuestionsWithContext"`
+}
+
+type ThoughtSparkerNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanThoughtSparker"`
+}
+
+type ApplicationNode struct {
+	BaseNode `neo4j:"LessonPlanApplication"`
+	// TODO: Remove this field
+	LessonPlanWhiteboardTemplateNode
+}
+
+type BrainTeaserNode struct {
+	BaseLessonPlanSkillQuestion `neo4j:"LessonPlanBrainTeaser"`
+	LessonPlanBrainTeaserWhiteboardTemplate
+	ForGroup bool `json:"forGroup"`
+}
+
+func (b *BrainTeaserNode) SetBaseLessonPlanSkillQuestion(newQuestion BaseLessonPlanSkillQuestion) {
+	b.BaseLessonPlanSkillQuestion = newQuestion
+}
+
+type MathsDebateNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanMathsDebate"`
+	LessonPlanMathsDebateWhiteboardTemplate
+	ForGroup bool `json:"forGroup"`
+}
+
+type SkillsNode struct {
+	BaseNode `neo4j:"LessonPlanSkills"`
+}
+
+type SkillSlideNode struct {
+	BaseNode `neo4j:"LessonPlanSkillSlide"`
+	/// SkillTemplateIDs is the IDs of the skill templates that this slide is based on
+	SkillTemplateIDs []id.ID `json:"skillTemplateIDs"`
+
+	/// GeneralTemplateIDs are the IDs of the general template that the skill templates is based on
+	/// We have title and icon in the general template so it can be shared between multiple skill templates
+	GeneralTemplateIDs []id.ID `json:"generalTemplateIDs"`
+
+	/// ExcludedTemplateIDs are the IDs of the skill templates that should be excluded from this slide
+	ExcludedTemplateIDs []id.ID `json:"excludedTemplateIDs"`
+
+	/// NoteTemplates are the IDs of the note templates that should be included in this slide
+	NoteTemplateIDs []id.ID `json:"noteTemplateIDs"`
+
+	/// The order of the templates in the slide, its combined order of the skill templates and note templates
+	TemplateOrder []id.ID `json:"templateOrder"`
+}
+
+type LessonPlanSkill struct {
+	BaseWorksheetNode `neo4j:"LessonPlanSkill"`
+}
+
+type LessonAgendaNode struct {
+	BaseNode `neo4j:"LessonPlanLessonAgenda"`
+	Image    *string `json:"image,omitempty" neo4j:"optional"`
+}
+
+type LearningGoalsNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanLearningGoals"`
+	Image             *string `json:"image,omitempty" neo4j:"optional"`
+}
+
+type ExitTicketNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanExitTicket"`
+}
+
+type ContemplativeQuestionNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanContemplativeQuestion"`
+	Difficulty        Difficulty `json:"difficulty"`
+}
+
+type LessonPlanQuestion struct {
+	neogo.Node `neo4j:"LessonPlanQuestion"`
+	CreatedAt  time.Time `json:"createdAt"`
+	question.QuillDocumentNode
+
+	Question   string      `json:"question"`
+	Answer     string      `json:"answer"`
+	Figure     string      `json:"figure"`
+	Difficulty *Difficulty `json:"difficulty,omitempty"`
+}
+
+type LessonPlanSkillQuestionNode struct {
+	Question      question.Question               `json:"question"`
+	UserQuestion  question.UserQuestion           `json:"userQuestion"`
+	Difficulty    *question.QuestionDifficulty    `json:"difficulty,omitempty"`
+	PracticePhase *question.QuestionPracticePhase `json:"practicePhase,omitempty"`
+}
+
+type LessonPlanEditConfig struct {
+	neogo.Node `neo4j:"LessonPlanEditConfig"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	DifficultyType     *Difficulty         `json:"difficultyType,omitempty"`
+	Difficulty         LessonPlanEditLevel `json:"difficulty"`
+	ReadingLevel       LessonPlanEditLevel `json:"readingLevel"`
+	Length             LessonPlanEditLevel `json:"length"`
+	Emoji              LessonPlanEditLevel `json:"emoji"`
+	EmptyContext       bool                `json:"emptyContext"`
+	SelectedObjectives []*skill.Skill
+	SelectedContext    *LessonPlanContext
+}
+
+type LessonPlanApplicationContent struct {
+	neogo.Node `neo4j:"LessonPlanApplicationContent"`
+	CreatedAt  time.Time `json:"createdAt"`
+	question.QuillDocumentNode
+
+	Title          string `json:"title"`
+	Example1Header string `json:"example1Header"`
+	Example1Body   string `json:"example1Body"`
+	Example2Header string `json:"example2Header"`
+	Example2Body   string `json:"example2Body"`
+	Image          string `json:"image"`
+	// TODO: Deprecated: Remove the fields once frontend is updated
+	Explanation     string `json:"explanation"`
+	ExampleTitle    string `json:"exampleTitle"`
+	ExampleQuestion string `json:"exampleQuestion"`
+	ExampleAnswer   string `json:"exampleAnswer"`
+}
+
+// Deprecated: This will be removed in the future
+type QuestionSet struct {
+	neogo.Node `neo4j:"QuestionSet"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+type LessonPlanContext struct {
+	neogo.Node `neo4j:"LessonPlanContext"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	Context            string   `json:"context"`
+	Icon               string   `json:"icon"`
+	Color              string   `json:"color"`
+	Type               string   `json:"type"`
+	StreamTitles       []string `json:"streamTitles"`
+	IntroductionImages []string `json:"introductionImages"`
+	LandscapeImages    []string `json:"landscapeImages"`
+	PortraitImages     []string `json:"portraitImages"`
+}
+
+type BaselineActivity struct {
+	neogo.Node `neo4j:"BaselineActivity"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	Activity string `json:"activity"`
+}
+type ThoughtSparkerReference struct {
+	neogo.Node `neo4j:"ThoughtSparkerReference"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	Reference string `json:"reference"`
+}
+type ContemplativeQuestionReference struct {
+	neogo.Node `neo4j:"ContemplativeQuestionReference"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	Reference string `json:"reference"`
+}
+
+type (
+	LessonPlanCardType             string
+	GeogebraSimulationType         string
+	ActivityWhiteboardTemplateType string
+)
+
+func (e ActivityWhiteboardTemplateType) IsValid() bool {
+	switch e {
+	case ActivityWhiteboardTemplateTypeTeacher, ActivityWhiteboardTemplateTypeStudent:
+		return true
+	}
+	return false
+}
+
+func (e ActivityWhiteboardTemplateType) String() string {
+	return string(e)
+}
+
+func (e *ActivityWhiteboardTemplateType) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ActivityWhiteboardTemplateType(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ActivityWhiteboardTemplateType", str)
+	}
+	return nil
+}
+
+func (e ActivityWhiteboardTemplateType) MarshalGQL(w io.Writer) {
+	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+const (
+	LessonPlanCardBlankNoteType          LessonPlanCardType = "BLANK_NOTE"
+	LessonPlanCardEmbedType              LessonPlanCardType = "EMBED"
+	LessonPlanCardFileType               LessonPlanCardType = "FILE"
+	LessonPlanCardVideoType              LessonPlanCardType = "VIDEO"
+	LessonPlanCardGeogebraSimulationType LessonPlanCardType = "GEOGEBRA_SIMULATION"
+	LessonPlanCardSlideType              LessonPlanCardType = "SLIDE"
+
+	GeogebraSimulationGraphType       GeogebraSimulationType = "GRAPHING"
+	GeogebraSimulationGraph3DType     GeogebraSimulationType = "GRAPH_3D"
+	GeogebraSimulationGeometryType    GeogebraSimulationType = "GEOMETRY"
+	GeogebraSimulationCASType         GeogebraSimulationType = "CAS"
+	GeogebraSimulationProbabilityType GeogebraSimulationType = "PROBABILITY"
+
+	ActivityWhiteboardTemplateTypeTeacher ActivityWhiteboardTemplateType = "TEACHER"
+	ActivityWhiteboardTemplateTypeStudent ActivityWhiteboardTemplateType = "STUDENT"
+)
+
+type BlankNoteCardNode struct {
+	BaseCard `neo4j:"LessonPlanCardBlankNote"`
+}
+
+func (BlankNoteCardNode) Type() LessonPlanCardType {
+	return LessonPlanCardBlankNoteType
+}
+
+func (b *BlankNoteCardNode) SetBaseCard(newCard BaseCard) {
+	b.BaseCard = newCard
+}
+
+type EmbedCardNode struct {
+	BaseCard `neo4j:"LessonPlanCardEmbed"`
+	URL      string `json:"url"`
+}
+
+func (EmbedCardNode) Type() LessonPlanCardType {
+	return LessonPlanCardEmbedType
+}
+
+func (e *EmbedCardNode) SetBaseCard(newCard BaseCard) {
+	e.BaseCard = newCard
+}
+
+type FileCardNode struct {
+	BaseCard `neo4j:"LessonPlanCardFile"`
+	URL      string `json:"url"`
+}
+
+func (FileCardNode) Type() LessonPlanCardType {
+	return LessonPlanCardFileType
+}
+
+func (f *FileCardNode) SetBaseCard(newCard BaseCard) {
+	f.BaseCard = newCard
+}
+
+type VideoCardNode struct {
+	BaseCard `neo4j:"LessonPlanCardVideo"`
+	URL      string `json:"url"`
+}
+
+func (VideoCardNode) Type() LessonPlanCardType {
+	return LessonPlanCardVideoType
+}
+
+func (v *VideoCardNode) SetBaseCard(newCard BaseCard) {
+	v.BaseCard = newCard
+}
+
+type GeogebraSimulationCardNode struct {
+	BaseCard       `neo4j:"LessonPlanCardGeogebraSimulation"`
+	SimulationType GeogebraSimulationType `json:"simulationType"`
+	Content        string                 `json:"content"`
+}
+
+func (GeogebraSimulationCardNode) Type() LessonPlanCardType {
+	return LessonPlanCardGeogebraSimulationType
+}
+
+func (g *GeogebraSimulationCardNode) SetBaseCard(newCard BaseCard) {
+	g.BaseCard = newCard
+}
+
+type SlideCardNode struct {
+	BaseCard             `neo4j:"LessonPlanCardSlide"`
+	WhiteboardTemplateID id.ID `json:"whiteboardTemplateID"`
+}
+
+func (SlideCardNode) Type() LessonPlanCardType {
+	return LessonPlanCardSlideType
+}
+
+func (g *SlideCardNode) SetBaseCard(newCard BaseCard) {
+	g.BaseCard = newCard
+}
+
+type LessonWorksheet struct {
+	neogo.Node `neo4j:"LessonWorksheet"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	WarmUpQuestionsEnabled            bool `json:"warmUpQuestionsEnabled"`
+	WarmUpQuestionsWithContextEnabled bool `json:"warmUpQuestionsWithContextEnabled"`
+	ThoughtSparkerEnabled             bool `json:"thoughtSparkerEnabled"`
+	ExitTicketEnabled                 bool `json:"exitTicketEnabled"`
+	ContemplativeQuestionEnabled      bool `json:"contemplativeQuestionEnabled"`
+	ActivityEnabled                   bool `json:"activityEnabled"`
+	WorkingOutSpaceEnabled            bool `json:"workingOutSpaceEnabled"`
+	NotesPageEnabled                  bool `json:"notesPageEnabled"`
+	ReducePaperEnabled                bool `json:"reducePaperEnabled"`
+	ClassQuestionsEnabled             bool `json:"classQuestionsEnabled"`
+	StudentQuestionsEnabled           bool `json:"studentQuestionsEnabled"`
+	BrainTeaserEnabled                bool `json:"brainTeaserEnabled"`
+	MathsDebateEnabled                bool `json:"mathsDebateEnabled"`
+	SituationalQuestionEnabled        bool `json:"situationalQuestionEnabled"`
+	ScaffoldedQuestionEnabled         bool `json:"scaffoldedQuestionEnabled"`
+	MultipleChoiceQuestionEnabled     bool `json:"multipleChoiceQuestionEnabled"`
+	ShortAnswerQuestionEnabled        bool `json:"shortAnswerQuestionEnabled"`
+	LearningGoalsEnabled              bool `json:"learningGoalsEnabled"`
+
+	LessonStarterEnabled     bool `json:"lessonStarterEnabled"`
+	PracticeQuestionsEnabled bool `json:"practiceQuestionsEnabled"`
+	WrapUpActivityEnabled    bool `json:"wrapUpActivityEnabled"`
+	NoteSpaceEnabled         bool `json:"noteSpaceEnabled"`
+}
+
+func (LessonWorksheet) IsEntity() {}
+
+func (l LessonWorksheet) GetID() string {
+	return l.ID
+}
+
+// Lesson Plan Skill Question
+type LessonPlanSkillQuestion interface {
+	LessonPlanNode
+	IsLessonPlanSkillQuestionNode()
+	SetBaseLessonPlanSkillQuestion(BaseLessonPlanSkillQuestion)
+}
+
+type BaseLessonPlanSkillQuestion struct {
+	BaseWorksheetNode `neo4j:"LessonPlanSkillQuestion"`
+}
+
+func (BaseLessonPlanSkillQuestion) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&TeacherQuestionNode{},
+		&StudentQuestionNode{},
+		&BrainTeaserNode{},
+	}
+}
+
+func (*BaseLessonPlanSkillQuestion) IsLessonPlanSkillQuestionNode() {}
+
+func (l BaseLessonPlanSkillQuestion) GetID() string {
+	return l.ID
+}
+
+type TeacherQuestionNode struct {
+	BaseLessonPlanSkillQuestion `neo4j:"TeacherQuestionsNode"`
+}
+
+func (t *TeacherQuestionNode) SetBaseLessonPlanSkillQuestion(newQuestion BaseLessonPlanSkillQuestion) {
+	t.BaseLessonPlanSkillQuestion = newQuestion
+}
+
+type StudentQuestionNode struct {
+	BaseLessonPlanSkillQuestion `neo4j:"StudentQuestionsNode"`
+}
+
+func (s *StudentQuestionNode) SetBaseLessonPlanSkillQuestion(newQuestion BaseLessonPlanSkillQuestion) {
+	s.BaseLessonPlanSkillQuestion = newQuestion
+}
+
+type ActivityNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanActivity"`
+	ForGroup          bool `json:"forGroup"`
+}
+
+type LessonPlanActivityContent struct {
+	neogo.Node `neo4j:"LessonPlanActivityContent"`
+	CreatedAt  time.Time `json:"createdAt"`
+	question.QuillDocumentNode
+
+	Image                  string   `json:"image"`
+	Header                 string   `json:"header"`
+	Scenario               string   `json:"scenario"`
+	Steps                  []string `json:"steps"`
+	Discussion             []string `json:"discussion"`
+	DifferentiationSupport string   `json:"differentiationSupport"`
+	DifferentiationExtend  string   `json:"differentiationExtend"`
+}
+
+type SituationalQuestionNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanSituationalQuestion"`
+}
+
+type ScaffoldedQuestionNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanScaffoldedQuestion"`
+	Difficulty        Difficulty `json:"difficulty"`
+}
+
+type MultipleChoiceQuestionNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanMultipleChoiceQuestion"`
+	Difficulty        Difficulty `json:"difficulty,omitempty"`
+}
+
+type ShortAnswerQuestionNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanShortAnswerQuestion"`
+	Difficulty        Difficulty `json:"difficulty,omitempty"`
+}
+
+type MisconceptionQuestionNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanMisconceptionQuestion"`
+}
+
+type IntroductionNode struct {
+	BaseWorksheetNode `neo4j:"LessonPlanIntroduction"`
+	Alignment         IntroductionAlignment `json:"alignment" neo4j:"alignment"`
+}
+
+type LessonPlanContextType struct {
+	neogo.Node `neo4j:"LessonPlanContextType"`
+	Name       string `json:"name"`
+}
+
+type CreateLessonPlanInputV3 struct {
+	Name       string               `json:"name"`
+	Context    string               `json:"context"`
+	SubtopicID id.ID                `json:"subtopicID"`
+	FolderID   *id.ID               `json:"folderID"`
+	LessonType *resource.LessonType `json:"lessonType,omitempty"`
+	Lessons    []LessonSpecV3       `json:"lessons"`
+}
+
+type LessonSpecV3 struct {
+	LessonID          *id.ID               `json:"lessonID,omitempty"`
+	Duration          time.Duration        `json:"duration"`
+	IntroductionNodes []NodeSpecV3         `json:"introductionNodes"`
+	SkillSections     []SkillSectionSpecV3 `json:"skillSections"`
+	PracticeNodes     []NodeSpecV3         `json:"practiceNodes"`
+}
+
+type SkillSectionSpecV3 struct {
+	SectionID *id.ID       `json:"sectionID,omitempty"`
+	SkillID   id.ID        `json:"skillID"`
+	Nodes     []NodeSpecV3 `json:"nodes"`
+}
+
+type NodeSpecV3 struct {
+	NodeID         *id.ID              `json:"nodeID,omitempty"`
+	Type           *LessonPlanNodeType `json:"type,omitempty"`
+	Title          *string             `json:"title,omitempty"`
+	Context        *string             `json:"context,omitempty"`
+	Difficulty     *Difficulty         `json:"difficulty,omitempty"`
+	CardConfig     *CardConfigV3       `json:"cardConfig,omitempty"`
+	TemplateConfig *TemplateConfigV3   `json:"templateConfig,omitempty"`
+}
+
+type CardConfigV3 struct {
+	Type           LessonPlanCardType `json:"type"`
+	Icon           map[string]any     `json:"icon,omitempty"`
+	Image          *string            `json:"image,omitempty"`
+	EmbedURL       *string            `json:"embedUrl,omitempty"`
+	FileURL        *string            `json:"fileUrl,omitempty"`
+	VideoURL       *string            `json:"videoUrl,omitempty"`
+	GeogebraConfig *GeogebraConfigV3  `json:"geogebraConfig,omitempty"`
+	SlideConfig    *SlideConfigV3     `json:"slideConfig,omitempty"`
+}
+
+type GeogebraConfigV3 struct {
+	SimulationType GeogebraSimulationType `json:"simulationType"`
+	Content        *string                `json:"content,omitempty"`
+}
+
+type SlideConfigV3 struct {
+	WhiteboardTemplateID id.ID `json:"whiteboardTemplateID"`
+}
+
+type TemplateConfigV3 struct {
+	SkillTemplateID   *id.ID `json:"skillTemplateID,omitempty"`
+	GeneralTemplateID *id.ID `json:"generalTemplateID,omitempty"`
+	NoteTemplateID    *id.ID `json:"noteTemplateID,omitempty"`
+}
+
+type UpdateLessonPlanInputV3 struct {
+	LessonPlanID       id.ID          `json:"lessonPlanID"`
+	Name               *string        `json:"name,omitempty"`
+	Context            *string        `json:"context,omitempty"`
+	Lessons            []LessonSpecV3 `json:"lessons"`
+	CustomInstructions *string        `json:"customInstructions,omitempty"`
+}
+
+// api/lesson_plan/node_repository.go
+package lessonplan
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"buf.build/gen/go/tutero/learning/protocolbuffers/go/v1/learning"
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/types"
+	"github.com/MathGaps/resources/api/question"
+	questiongroup "github.com/MathGaps/resources/api/question_group"
+	"github.com/MathGaps/resources/api/resource"
+	"github.com/MathGaps/resources/api/skill"
+	whiteboardtemplate "github.com/MathGaps/resources/api/whiteboard_template"
+)
+
+type NodeRepository interface {
+	Get(ctx context.Context, id id.ID) (node LessonPlanNode, err error)
+	GetGroup(ctx context.Context, id id.ID) (*LessonPlanGroupConfig, error)
+	Delete(ctx context.Context, id id.ID) (bool, error)
+
+	// Edit is the main entry point for editing a lesson plan node.
+	// It handles three types of edits:
+	// 1. Objective-based regeneration - Regenerates content based on selected learning objectives
+	// 2. Context-based regeneration - Regenerates content to align with a specific context
+	// 3. Slider-based regeneration - Adjusts content based on slider configurations (difficulty, length, style)
+	Edit(ctx context.Context, id id.ID, input LessonPlanEditInput) (LessonPlanNode, error)
+	GetLessonForNode(ctx context.Context, nodeID id.ID) (*Lesson, error)
+	GetLessonForGroup(ctx context.Context, groupID id.ID) (*Lesson, error)
+
+	GetLessonPlanEditConfig(ctx context.Context, nodeID id.ID) (*LessonPlanEditConfig, error)
+	GetLessonPlanEditConfigForQuestion(ctx context.Context, questionID id.ID) (*LessonPlanEditConfig, error)
+	RevertLessonPlanEditConfig(ctx context.Context, nodeID id.ID, input LessonPlanEditConfigInput) (*LessonPlanEditConfig, error)
+
+	GetQuillDocument(ctx context.Context, nodeID id.ID) ([]types.QuillDelta, error)
+	GetQuillPlaintext(ctx context.Context, nodeID id.ID) (string, error)
+	UpdateQuillDocument(ctx context.Context, nodeID id.ID, input []types.QuillDelta) (id.ID, error)
+	UpdateQuillDocumentAtIndex(ctx context.Context, nodeID id.ID, index int, delta types.QuillDelta) (id.ID, error)
+
+	// TODO: Check if duration exists in durationChoices for the availableNode
+	// linked to this node. If so, update duration on node. If not, return an error.
+	// Obtain runtime-type of node and call RefreshSkills if SkillsNode
+	// Post: Obtain available nodes and FlexToDuration(duration)
+	UpdateDuration(ctx context.Context, id id.ID, duration time.Duration) (*resource.LessonPlan, error)
+	Toggle(ctx context.Context, lessonPlanID id.ID, inputs []*ToggleNodeInput) (*resource.LessonPlan, error)
+	ToggleGroup(ctx context.Context, lessonID, groupID id.ID) (*resource.LessonPlan, error)
+	CanToggle(ctx context.Context, nodeID id.ID) (bool, error)
+	CanToggleGroup(ctx context.Context, groupID id.ID) (bool, error)
+	Teach(ctx context.Context, lessonID, nodeID id.ID) (*LessonTaughtLessonPlanNodeEdge, error)
+	Unteach(ctx context.Context, lessonID, nodeID id.ID) (*LessonTaughtLessonPlanNodeEdge, error)
+	IsTaught(ctx context.Context, nodeID id.ID) (bool, error)
+
+	// LessonPlanRepository.MoveNodeToSection does not handle enabling/disabling nodes
+	// Method is placed here so it can use LessonPlanRepository.MoveNodeToSection
+	MoveHiddenNodeToSection(ctx context.Context, lessonPlanID, lessonID, nodeID, sectionID id.ID, index int) (LessonPlanNode, error)
+	ReorderNodes(ctx context.Context, lessonPlanID id.ID, inputs []*ReorderNodesSectionInput, hidden []id.ID) (*resource.LessonPlan, error)
+	ReorderSections(ctx context.Context, lessonPlanID id.ID, inputs []*ReorderSectionsLessonInput) (*resource.LessonPlan, error)
+	ReorderLearningObjectives(ctx context.Context, lessonPlanID id.ID, inputs []*ReorderLearningObjectivesInput, hidden []id.ID) (*resource.LessonPlan, error)
+
+	UpdateLessonPlanQuestion(ctx context.Context, questionID id.ID, input UpdateLessonPlanQuestionInput) (*LessonPlanQuestion, error)
+	UpdateSkillQuestion(ctx context.Context, lessonPlanID id.ID, questionID id.ID, input UpdateSkillQuestionInput) (question.UserQuestion, error)
+
+	// deprecated apis
+	CanFlexNode(ctx context.Context, lessonPlanID, lessonID id.ID, oldDuration, newDuration time.Duration) (bool, error)
+}
+
+type ReconcilerFunc func(ctx context.Context) error
+
+type LessonPlanNodeReconciler[N any, PN interface {
+	LessonPlanNode
+	*N
+}] interface {
+	// Generates the content from llm based on the context
+	ReconcileUpdatedContext(
+		ctx context.Context,
+		lessonPlanID,
+		lessonPlanNodeID id.ID,
+		lpContext string,
+		isContextChanged bool,
+	) (PN, error)
+
+	// Regenerates the content from llm based on selected
+	// regeneration option under current context
+	ReconcileRegeneration(
+		ctx context.Context,
+		input ReconcileEditInput,
+	) (PN, error)
+
+	// Generates multiple nodes content from llm in a single batch
+	// based on the context and section, enabling section-aware generation
+	ReconcileBatchUpdatedContext(
+		ctx context.Context,
+		lessonPlanID id.ID,
+		lessonPlanNodeIDs []id.ID,
+		sectionID id.ID,
+		lpContext string,
+		isContextChanged bool,
+	) ([]PN, error)
+}
+
+type ReconcileEditInput struct {
+	LessonPlanID     id.ID
+	LessonPlanNodeID id.ID
+	EditTemplate     string
+	EditValues       map[string]string
+}
+
+type LessonPlanNodeGetter[N any, PN interface {
+	*N
+	LessonPlanNode
+}] interface {
+	Get(ctx context.Context, id id.ID) (PN, error)
+}
+
+type WarmUpQuestionsNodeRepository interface {
+	LessonPlanNodeGetter[WarmUpQuestionsNode, *WarmUpQuestionsNode]
+	GetQuestions(ctx context.Context, nodeID id.ID) ([]*LessonPlanQuestion, error)
+	GetRegenerateOptions(ctx context.Context) ([]RegenerateOption, error)
+	RegenerateWithInput(ctx context.Context, nodeID id.ID, input ReconcileEditInput) (*WarmUpQuestionsNode, error)
+}
+
+type WarmUpQuestionsWithContextNodeRepository interface {
+	LessonPlanNodeGetter[WarmUpQuestionsWithContextNode, *WarmUpQuestionsWithContextNode]
+	GetQuestions(ctx context.Context, nodeID id.ID) ([]*LessonPlanQuestion, error)
+	GetRegenerateOptions(ctx context.Context) ([]RegenerateOption, error)
+	RegenerateWithInput(ctx context.Context, nodeID id.ID, input ReconcileEditInput) (*WarmUpQuestionsWithContextNode, error)
+}
+
+type ThoughtSparkerNodeRepository interface {
+	LessonPlanNodeGetter[ThoughtSparkerNode, *ThoughtSparkerNode]
+	GetQuestion(ctx context.Context, nodeID id.ID) (*LessonPlanQuestion, error)
+	// Deprecated: In favor of GetQuestion
+	GetQuestions(ctx context.Context, nodeID id.ID) ([]*LessonPlanQuestion, error)
+	RegenerateWithInput(ctx context.Context, nodeID id.ID, input ReconcileEditInput) (*ThoughtSparkerNode, error)
+}
+
+type ApplicationNodeRepository interface {
+	LessonPlanNodeGetter[ApplicationNode, *ApplicationNode]
+	GetApplication(ctx context.Context, nodeID id.ID) (*LessonPlanApplicationContent, error)
+	RegenerateWithInput(ctx context.Context, nodeID id.ID, input ReconcileEditInput) (*ApplicationNode, error)
+}
+
+type BrainTeaserNodeRepository interface {
+	LessonPlanNodeGetter[BrainTeaserNode, *BrainTeaserNode]
+}
+
+type MathsDebateNodeRepository interface {
+	LessonPlanNodeGetter[MathsDebateNode, *MathsDebateNode]
+}
+
+type ActivityNodeRepository interface {
+	LessonPlanNodeGetter[ActivityNode, *ActivityNode]
+	GetActivity(ctx context.Context, nodeID id.ID) (*LessonPlanActivityContent, error)
+	RegenerateWithInput(ctx context.Context, nodeID id.ID, input ReconcileEditInput) (*ActivityNode, error)
+}
+
+type SituationalQuestionNodeRepository interface {
+	LessonPlanNodeGetter[SituationalQuestionNode, *SituationalQuestionNode]
+	GetQuestions(ctx context.Context, nodeID id.ID) ([]*LessonPlanQuestion, error)
+	RegenerateWithInput(ctx context.Context, nodeID id.ID, input ReconcileEditInput) (*SituationalQuestionNode, error)
+}
+
+type ScaffoldedQuestionNodeRepository interface {
+	LessonPlanNodeGetter[ScaffoldedQuestionNode, *ScaffoldedQuestionNode]
+	GetQuestions(ctx context.Context, nodeID id.ID) ([]*question.LessonPlanUserQuestion, error)
+	RegenerateWithInput(ctx context.Context, nodeID id.ID, input ReconcileEditInput) (*ScaffoldedQuestionNode, error)
+}
+
+type MultipleChoiceQuestionNodeRepository interface {
+	LessonPlanNodeGetter[MultipleChoiceQuestionNode, *MultipleChoiceQuestionNode]
+	GetQuestion(ctx context.Context, nodeID id.ID) (*question.LessonPlanUserQuestion, error)
+}
+
+type ShortAnswerQuestionNodeRepository interface {
+	LessonPlanNodeGetter[ShortAnswerQuestionNode, *ShortAnswerQuestionNode]
+	GetQuestion(ctx context.Context, nodeID id.ID) (*question.LessonPlanUserQuestion, error)
+}
+
+type MisconceptionQuestionNodeRepository interface {
+	LessonPlanNodeGetter[MisconceptionQuestionNode, *MisconceptionQuestionNode]
+	GetQuestions(ctx context.Context, nodeID id.ID) ([]*LessonPlanQuestion, error)
+	RegenerateWithInput(ctx context.Context, nodeID id.ID, input ReconcileEditInput) (*MisconceptionQuestionNode, error)
+}
+
+// TODO! Remove this once we have fully migrated to new layout structure
+type SkillsNodeRepository interface {
+	LessonPlanNodeGetter[LessonPlanSkill, *LessonPlanSkill]
+	RefreshSkills(ctx context.Context, lessonPlanID id.ID, inputs []RefreshSkillInput, existingSkillIDs []id.ID) ([]LessonSection, error)
+	RegenerateWorksheetSkillQuestions(ctx context.Context, lessonPlanID id.ID, skillIDs []id.ID) error
+	GetSkill(ctx context.Context, lessonPlanSkillID id.ID) (*skill.Skill, error)
+	GetSkills(ctx context.Context, lessonID id.ID) ([]*skill.Skill, error)
+	GetQuestionBank(ctx context.Context, questionSetID id.ID) ([]*questiongroup.QuestionGroup, error)
+	GetQuestionBankForLessonPlanSkill(ctx context.Context, nodeID id.ID) ([]*questiongroup.QuestionGroup, error)
+	GetQuestionBankForLessonPlanSkill2(ctx context.Context, nodeID id.ID) ([]*question.Question, error)
+	GetQuestionBankForLessonPlanSkillSection(ctx context.Context, sectionID id.ID) ([]*question.Question, error)
+	IsQuestionBankEmpty(ctx context.Context, nodeID id.ID) (bool, error)
+	IsQuestionBankEmpty2(ctx context.Context, nodeID id.ID) (bool, error)
+	GetQuestionSet(ctx context.Context, lessonPlanSkillID id.ID, forTeacher bool) (*QuestionSet, error)
+	GetQuestionsInQuestionSet(ctx context.Context, questionSetID id.ID) ([]question.Question, error)
+	AddQuestionToLessonPlanSkillQuestion(ctx context.Context, nodeID id.ID, input AddQuestionToLessonPlanSkillQuestionInput) (LessonPlanSkillQuestion, error)
+	AddSkillQuestionsToWorksheet(ctx context.Context, input AddSkillQuestionsToWorksheetInput) error
+	GetQuestionDifficulty(ctx context.Context, questionID, nodeID id.ID) (*question.QuestionDifficulty, error)
+	RemoveQuestionFromLessonPlanSkillQuestion(ctx context.Context, nodeID id.ID, questionIDs []id.ID) (LessonPlanSkillQuestion, error)
+	GetSkillTemplates(ctx context.Context, slide SkillSlideNode) ([]*whiteboardtemplate.SkillSlide, error)
+
+	AddSkillSlideTemplate(ctx context.Context, nodeID, templateID id.ID, templateType SkillSlideTemplateType) (*SkillSlideNode, error)
+	RemoveSkillSlideTemplate(ctx context.Context, nodeID, templateID id.ID, templateType SkillSlideTemplateType) (*SkillSlideNode, error)
+	ReorderSkillSlideTemplates(ctx context.Context, nodeID id.ID, templateIDs []id.ID) (*SkillSlideNode, error)
+
+	SetupContext(ctx context.Context) context.Context
+	ReplaceNodeQuestion(ctx context.Context, input ReplaceNodeQuestionInput) (LessonPlanNode, error)
+}
+
+type LessonPlanSkillQuestionRepository interface {
+	GetQuestions(ctx context.Context, nodeID id.ID) ([]*LessonPlanSkillQuestionNode, error)
+	GetSkill(ctx context.Context, nodeID id.ID) (*skill.Skill, error)
+	ReorderStudentPracticeQuestions(ctx context.Context, lessonPlanID, nodeID id.ID, input []*QuestionsByDifficultyInput) (LessonPlanSkillQuestion, error)
+	ReorderClassPracticeQuestions(ctx context.Context, lessonPlanID, nodeID id.ID, input []*ReorderClassPracticeQuestionInput) (LessonPlanSkillQuestion, error)
+}
+
+type LessonAgendaNodeRepository interface {
+	LessonPlanNodeGetter[LessonAgendaNode, *LessonAgendaNode]
+}
+
+type LearningGoalsNodeRepository interface {
+	LessonPlanNodeGetter[LearningGoalsNode, *LearningGoalsNode]
+	GetLearningGoals(ctx context.Context, nodeID id.ID) ([]*skill.Skill, error)
+}
+
+type ExitTicketNodeRepository interface {
+	LessonPlanNodeGetter[ExitTicketNode, *ExitTicketNode]
+	GetQuestions(ctx context.Context, nodeID id.ID) ([]*LessonPlanQuestion, error)
+	GetRegenerateOptions(ctx context.Context) ([]RegenerateOption, error)
+	RegenerateWithInput(ctx context.Context, nodeID id.ID, input ReconcileEditInput) (*ExitTicketNode, error)
+}
+
+type IntroductionNodeRepository interface {
+	LessonPlanNodeGetter[IntroductionNode, *IntroductionNode]
+	GetImage(ctx context.Context, nodeID id.ID) (*string, error)
+	ClearImage(ctx context.Context, lessonPlanID id.ID) error
+	UpdateAlignment(ctx context.Context, nodeID id.ID, alignment IntroductionAlignment) (*IntroductionNode, error)
+}
+
+type ContemplativeQuestionNodeRepository interface {
+	LessonPlanNodeGetter[ContemplativeQuestionNode, *ContemplativeQuestionNode]
+	GetQuestion(ctx context.Context, nodeID id.ID) (*LessonPlanQuestion, error)
+	GetUserQuestion(ctx context.Context, nodeID id.ID) (*question.LessonPlanUserQuestion, error)
+	// Deprecated: In favor of GetQuestion
+	GetQuestions(ctx context.Context, nodeID id.ID) ([]*LessonPlanQuestion, error)
+	RegenerateWithInput(ctx context.Context, nodeID id.ID, input ReconcileEditInput) (*ContemplativeQuestionNode, error)
+}
+
+type CardNodeRepository interface {
+	Get(ctx context.Context, nodeID id.ID) (LessonPlanCard, error)
+	Update(ctx context.Context, lessonPlanID, sectionID id.ID, nodeID *id.ID, input UpdateLessonPlanCardNodeInput) (LessonPlanCard, error)
+}
+
+type RefreshSkillInput struct {
+	SkillID                  id.ID   `json:"skillID"`
+	TeacherQuestionTitle     *string `json:"teacherQuestionTitle,omitempty"`
+	StudentQuestionTitle     *string `json:"studentQuestionTitle,omitempty"`
+	BrainTeaserQuestionTitle *string `json:"brainTeaserQuestionTitle,omitempty"`
+	SlideTitle               *string `json:"slideTitle,omitempty"`
+	HasTeacherQuestion       *bool   `json:"hasTeacherQuestion"`
+	HasStudentQuestion       *bool   `json:"hasStudentQuestion"`
+	HasLessonSlide           *bool   `json:"hasLessonSlide"`
+	IsFromLessonPlanCreation bool    `json:"isFromLessonPlanCreation"`
+	HasBrainTeaserQuestions  *bool   `json:"hasBrainTeaserQuestions"`
+}
+
+type (
+	SpanningSetInputCreator           func(ctx context.Context, lessonPlanID id.ID, skillIDs, existingSkillIDs []id.ID) ([]*learning.SpanningQuestionSetInput, error)
+	AddSkillQuestionsToWorksheetInput struct {
+		WorksheetPlanID         id.ID
+		SkillIDs                []id.ID
+		ExistingSkillIDs        []id.ID
+		SpanningSetInputCreator *SpanningSetInputCreator
+		CustomDifficulty        *WorksheetEditDifficulty
+	}
+)
+
+type ReorderNodesSectionInput struct {
+	SectionID id.ID   `json:"sectionID"`
+	Nodes     []id.ID `json:"nodes"`
+}
+
+type ReorderSectionsLessonInput struct {
+	LessonID id.ID   `json:"lessonID"`
+	Sections []id.ID `json:"sections"`
+}
+
+type ReorderLearningObjectivesInput struct {
+	LessonID id.ID   `json:"lessonID"`
+	SkillIDs []id.ID `json:"skillIDs"`
+}
+
+type AddQuestionToLessonPlanSkillQuestionInput struct {
+	Difficulty    *question.QuestionDifficulty     `json:"difficulty,omitempty"`
+	PracticePhase *question.QuestionPracticePhase  `json:"practicePhase,omitempty"`
+	Type          *question.LessonPlanQuestionType `json:"type,omitempty"`
+	QuestionIDs   []id.ID                          `json:"-"`
+}
+
+type ToggleNodeInput struct {
+	LessonID id.ID `json:"lessonID"`
+	NodeID   id.ID `json:"nodeID"`
+	Enable   *bool `json:"enable"`
+}
+
+type GetNodeDataReconcilerInput struct {
+	LessonPlanID      id.ID
+	LessonPlanNodeID  id.ID
+	LessonPlanNodeIDs []id.ID
+	SectionID         id.ID
+	Context           string
+	Node              LessonPlanNode
+	Nodes             []LessonPlanNode
+	IsContextChanged  bool
+}
+
+type UpdateLessonPlanQuestionInput struct {
+	Question *string `json:"question,omitempty"`
+	Answer   *string `json:"answer,omitempty"`
+	Figure   *string `json:"figure,omitempty"`
+}
+
+type UpdateSkillQuestionInput struct {
+	QuillDocument []types.QuillDelta               `json:"quillDocument"`
+	Answers       []UpdateSkillQuestionAnswerInput `json:"answers"`
+}
+
+type UpdateSkillQuestionAnswerInput struct {
+	ID            id.ID              `json:"id"`
+	QuillDocument []types.QuillDelta `json:"quillDocument"`
+	IsCorrect     bool               `json:"isCorrect"`
+}
+
+type UpdateLessonPlanCardEmbedInput struct {
+	URL string `json:"url"`
+}
+
+type UpdateLessonPlanCardFileInput struct {
+	URL string `json:"url"`
+}
+
+type UpdateLessonPlanCardVideoInput struct {
+	URL string `json:"url"`
+}
+
+type UpdateLessonPlanCardGeogebraInput struct {
+	SimulationType GeogebraSimulationType `json:"simulationType"`
+	Content        string                 `json:"content"`
+}
+
+type ReplaceNodeQuestionInput struct {
+	NodeID        string  `json:"nodeID"`
+	OldQuestionID *string `json:"oldQuestionID,omitempty"`
+	QuestionID    string  `json:"questionID"`
+}
+
+type UpdateLessonPlanCardNodeInput struct {
+	Title         *string                            `json:"title"`
+	Icon          map[string]any                     `json:"icon"`
+	Type          LessonPlanCardType                 `json:"type"`
+	Image         *string                            `json:"image"`
+	EmbedInput    *UpdateLessonPlanCardEmbedInput    `json:"embedInput,omitempty"`
+	FileInput     *UpdateLessonPlanCardFileInput     `json:"fileInput,omitempty"`
+	VideoInput    *UpdateLessonPlanCardVideoInput    `json:"videoInput,omitempty"`
+	GeogebraInput *UpdateLessonPlanCardGeogebraInput `json:"geogebraInput,omitempty"`
+}
+
+func (i UpdateLessonPlanCardNodeInput) Validate(create bool) error {
+	if create {
+		if i.Title == nil || *i.Title == "" {
+			return fmt.Errorf("title is required")
+		}
+		if len(i.Icon) == 0 && i.Type != LessonPlanCardGeogebraSimulationType {
+			return fmt.Errorf("icon is required")
+		}
+	}
+	switch i.Type {
+	case LessonPlanCardBlankNoteType:
+		return nil
+	case LessonPlanCardEmbedType:
+		if i.EmbedInput == nil {
+			return fmt.Errorf("embedInput is required")
+		}
+	case LessonPlanCardFileType:
+		if i.FileInput == nil {
+			return fmt.Errorf("fileInput is required")
+		}
+	case LessonPlanCardVideoType:
+		if i.VideoInput == nil {
+			return fmt.Errorf("videoInput is required")
+		}
+	case LessonPlanCardGeogebraSimulationType:
+		if i.GeogebraInput == nil {
+			return fmt.Errorf("geogebraInput is required")
+		}
+	}
+	return nil
+}
+
+// Creates a concrete implementation of LessonPlanCard based on the input
+// UpdateLessonPlanCardNodeInput.Validate() must be called before this
+func (i UpdateLessonPlanCardNodeInput) CreateCard(nodeID *id.ID) LessonPlanCard {
+	baseCard := BaseCard{
+		BaseNode: BaseNode{
+			Ready:   true,
+			Enabled: true,
+		},
+	}
+	if nodeID == nil || *nodeID == "" {
+		baseCard.SetID(id.MustNew())
+	} else {
+		baseCard.SetID(*nodeID)
+	}
+	if i.Title != nil {
+		baseCard.Title = *i.Title
+	}
+	if i.Image != nil {
+		baseCard.Image = *i.Image
+	}
+	if len(i.Icon) > 0 {
+		baseCard.Icon = i.Icon
+	}
+
+	var card LessonPlanCard
+	switch i.Type {
+	case LessonPlanCardBlankNoteType:
+		card = &BlankNoteCardNode{}
+	case LessonPlanCardEmbedType:
+		card = &EmbedCardNode{
+			URL: i.EmbedInput.URL,
+		}
+	case LessonPlanCardFileType:
+		card = &FileCardNode{
+			URL: i.FileInput.URL,
+		}
+	case LessonPlanCardVideoType:
+		card = &VideoCardNode{
+			URL: i.VideoInput.URL,
+		}
+	case LessonPlanCardGeogebraSimulationType:
+		card = &GeogebraSimulationCardNode{
+			SimulationType: i.GeogebraInput.SimulationType,
+			Content:        i.GeogebraInput.Content,
+		}
+	}
+
+	card.SetBaseCard(baseCard)
+	return card
+}
+
+type QuestionsByDifficultyInput struct {
+	QuestionIDs []id.ID                     `json:"questionIDs"`
+	Difficulty  question.QuestionDifficulty `json:"difficulty"`
+}
+
+type ReorderClassPracticeQuestionInput struct {
+	PracticePhase *question.QuestionPracticePhase `json:"practicePhase,omitempty"`
+	Difficulty    *question.QuestionDifficulty    `json:"difficulty,omitempty"`
+	QuestionIDs   []id.ID                         `json:"questionIDs"`
+}
+
+type LessonPlanCardEmbedInput struct {
+	URL string `json:"url"`
+}
+
+type LessonPlanCardFileInput struct {
+	URL string `json:"url"`
+}
+
+type LessonPlanCardVideoInput struct {
+	URL string `json:"url"`
+}
+
+type LessonPlanCardGeogebraInput struct {
+	SimulationType GeogebraSimulationType `json:"simulationType"`
+	Content        string                 `json:"content"`
+}
+
+type LessonPlanCardSlideInput struct {
+	WhiteboardTemplateID id.ID `json:"whiteboardTemplateID"`
+}
+
+type LessonPlanCardNodeInput struct {
+	Title         *string                      `json:"title"`
+	Icon          map[string]any               `json:"icon"`
+	Type          LessonPlanCardType           `json:"type"`
+	Image         *string                      `json:"image,omitempty"`
+	EmbedInput    *LessonPlanCardEmbedInput    `json:"embedInput,omitempty"`
+	FileInput     *LessonPlanCardFileInput     `json:"fileInput,omitempty"`
+	VideoInput    *LessonPlanCardVideoInput    `json:"videoInput,omitempty"`
+	GeogebraInput *LessonPlanCardGeogebraInput `json:"geogebraInput,omitempty"`
+	SlideInput    *LessonPlanCardSlideInput    `json:"slideInput,omitempty"`
+}
+
+func (i LessonPlanCardNodeInput) Validate(create bool) error {
+	if create {
+		if i.Title == nil || *i.Title == "" {
+			return fmt.Errorf("title is required")
+		}
+		if len(i.Icon) == 0 && i.Type != LessonPlanCardGeogebraSimulationType {
+			return fmt.Errorf("icon is required")
+		}
+	}
+	switch i.Type {
+	case LessonPlanCardBlankNoteType:
+		return nil
+	case LessonPlanCardEmbedType:
+		if i.EmbedInput == nil {
+			return fmt.Errorf("embedInput is required")
+		}
+	case LessonPlanCardFileType:
+		if i.FileInput == nil {
+			return fmt.Errorf("fileInput is required")
+		}
+	case LessonPlanCardVideoType:
+		if i.VideoInput == nil {
+			return fmt.Errorf("videoInput is required")
+		}
+	case LessonPlanCardGeogebraSimulationType:
+		if i.GeogebraInput == nil {
+			return fmt.Errorf("geogebraInput is required")
+		}
+	case LessonPlanCardSlideType:
+		if i.SlideInput == nil {
+			return fmt.Errorf("slideInput is required")
+		}
+	}
+	return nil
+}
+
+// Creates a concrete implementation of LessonPlanCard based on the input
+// UpdateLessonPlanCardNodeInput.Validate() must be called before this
+func (i LessonPlanCardNodeInput) CreateCard(nodeID *id.ID) LessonPlanCard {
+	baseCard := BaseCard{
+		BaseNode: BaseNode{
+			Ready:   true,
+			Enabled: true,
+			Type:    LessonPlanNodeTypeCard,
+		},
+	}
+	if nodeID == nil || *nodeID == "" {
+		baseCard.SetID(id.MustNew())
+	} else {
+		baseCard.SetID(*nodeID)
+	}
+	if i.Title != nil {
+		baseCard.Title = *i.Title
+	}
+	if i.Image != nil {
+		baseCard.Image = *i.Image
+	}
+	if len(i.Icon) > 0 {
+		baseCard.Icon = i.Icon
+	}
+
+	var card LessonPlanCard
+	switch i.Type {
+	case LessonPlanCardBlankNoteType:
+		card = &BlankNoteCardNode{}
+	case LessonPlanCardEmbedType:
+		card = &EmbedCardNode{
+			URL: i.EmbedInput.URL,
+		}
+	case LessonPlanCardFileType:
+		card = &FileCardNode{
+			URL: i.FileInput.URL,
+		}
+	case LessonPlanCardVideoType:
+		card = &VideoCardNode{
+			URL: i.VideoInput.URL,
+		}
+	case LessonPlanCardGeogebraSimulationType:
+		card = &GeogebraSimulationCardNode{
+			SimulationType: i.GeogebraInput.SimulationType,
+			Content:        i.GeogebraInput.Content,
+		}
+	case LessonPlanCardSlideType:
+		card = &SlideCardNode{
+			WhiteboardTemplateID: i.SlideInput.WhiteboardTemplateID,
+		}
+	}
+
+	card.SetBaseCard(baseCard)
+	return card
+}
+
+// api/lesson_plan/prompts.go
+package lessonplan
+
+//
+import (
+	"context"
+
+	// "github.com/MathGaps/ai-tooling/api/llm"
+	"github.com/MathGaps/ai-tooling/api/llm"
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type LessonPlanPromptNode[
+	N any, PN interface {
+		*N
+		LessonPlanNode
+	},
+] interface {
+	HasPrompt() bool
+	GetUpdateContextPromptConfigurations(ctx context.Context, node PN, lpContext string, isContextChanged bool) ([]*PromptConfiguration[N, PN], error)
+	GetRegeneratePromptConfigurations(ctx context.Context, node PN, template string, editValues map[string]string) ([]*PromptConfiguration[N, PN], error)
+	GetRelevantExamples(ctx context.Context, node PN, skillIDs []id.ID) (string, error)
+}
+
+type LessonPlanWhiteboardTemplateNode struct {
+	WhiteboardTemplateID id.ID `json:"whiteboardTemplateID"`
+}
+
+type LessonPlanBrainTeaserWhiteboardTemplate struct {
+	WhiteboardTeacherTemplateID id.ID `json:"whiteboardTeacherTemplateID"`
+	WhiteboardStudentTemplateID id.ID `json:"whiteboardStudentTemplateID"`
+}
+type LessonPlanMathsDebateWhiteboardTemplate struct {
+	WhiteboardTeacherTemplateID id.ID `json:"whiteboardTeacherTemplateID"`
+	WhiteboardStudentTemplateID id.ID `json:"whiteboardStudentTemplateID"`
+}
+
+type LessonPlanTemplateValues struct {
+	NodeID               id.ID
+	LessonPlanID         id.ID
+	LessonID             id.ID
+	SubtopicID           id.ID
+	ClassYear            string
+	YearOrder            int32
+	Strand               string
+	Substrand            string
+	ContentDescriptor    string
+	Country              string
+	Skills               string
+	Context              string
+	ContextDetails       string
+	Duration             string
+	ExistingContent      string
+	FirstSkill           string
+	FirstSubstrand       string
+	RelevantExamples     string
+	IsFirstPeriod        bool
+	PreviousLessonSkills string
+}
+
+type LessonPlanPromptOutput[N any, PN interface {
+	*N
+	LessonPlanNode
+}] interface {
+	UnmarshalOutput([]byte) error
+
+	// Update the node with the content generated from LLM
+	ReconcileUpdatedContextOutput(
+		ctx context.Context,
+		lessonPlanID id.ID,
+		node PN,
+		newContext string,
+		isContextChanged bool,
+	) (PN, error)
+
+	// Update the specified part of the node with the content
+	// regenerated from LLM
+	ReconcileRegenerationOutput(
+		ctx context.Context,
+		node PN,
+		lessonPlanID id.ID,
+	) (PN, error)
+}
+
+type PromptConfiguration[N any, PN interface {
+	*N
+	LessonPlanNode
+}] struct {
+	SystemTemplate      string
+	PromptTemplate      string
+	BuildPromptValues   func(baseInput LessonPlanTemplateValues) (any, error)
+	NewOutput           func() LessonPlanPromptOutput[N, PN]
+	Provider            llm.ProviderType
+	Model               string
+	MaxCompletionTokens int32
+	Temperature         float32
+	ReasoningEffort     string
+	LatexEnabled        bool
+}
+
+// api/lesson_plan/regenerate_node.go
+package lessonplan
+
+// Deprecated: Will be removed in future in favor of EditableLessonPlanNode
+type RegenerativeLessonPlanNode interface {
+	IsRegenerativeLessonPlanNode()
+}
+
+type RegenerateOption string
+
+const (
+	RegenerateOptionRegenerate  RegenerateOption = "REGENERATE"
+	RegenerateOptionMakeLonger  RegenerateOption = "MAKE_LONGER"
+	RegenerateOptionMakeEasier  RegenerateOption = "MAKE_EASIER"
+	RegenerateOptionMakeHarder  RegenerateOption = "MAKE_HARDER"
+	RegenerateOptionMakeShorter RegenerateOption = "MAKE_SHORTER"
+	RegenerateOptionSimplify    RegenerateOption = "SIMPLIFY"
+)
+
+type EditableLessonPlanNode interface {
+	IsEditableLessonPlanNode()
+}
+
+type LessonPlanEditLevel string
+
+const (
+	LessonPlanEditLevelLevelOne   LessonPlanEditLevel = "LEVEL_ONE"
+	LessonPlanEditLevelLevelTwo   LessonPlanEditLevel = "LEVEL_TWO"
+	LessonPlanEditLevelLevelThree LessonPlanEditLevel = "LEVEL_THREE"
+	LessonPlanEditLevelLevelFour  LessonPlanEditLevel = "LEVEL_FOUR"
+	LessonPlanEditLevelLevelFive  LessonPlanEditLevel = "LEVEL_FIVE"
+)
+
+var LessonPlanEditLevels = []LessonPlanEditLevel{
+	LessonPlanEditLevelLevelOne,
+	LessonPlanEditLevelLevelTwo,
+	LessonPlanEditLevelLevelThree,
+	LessonPlanEditLevelLevelFour,
+	LessonPlanEditLevelLevelFive,
+}
+
+// ToRelativeAdjustment converts LessonPlanEditLevel enum values to relative integer adjustments
+// which is used to adjust the length and emoji count of the content
+func (level LessonPlanEditLevel) ToRelativeAdjustment() int {
+	switch level {
+	case LessonPlanEditLevelLevelOne:
+		return -2
+	case LessonPlanEditLevelLevelTwo:
+		return -1
+	case LessonPlanEditLevelLevelThree:
+		return 0
+	case LessonPlanEditLevelLevelFour:
+		return 1
+	case LessonPlanEditLevelLevelFive:
+		return 2
+	default:
+		return 0 // Default to neutral
+	}
+}
+
+// ToTranslation converts LessonPlanEditLevel enum values to relative string adjustments
+// which is used to adjust the difficulty and reading level of the content
+func (level LessonPlanEditLevel) ToTranslation() string {
+	switch level {
+	case LessonPlanEditLevelLevelOne:
+		return "2 levels lower"
+	case LessonPlanEditLevelLevelTwo:
+		return "1 level lower"
+	case LessonPlanEditLevelLevelThree:
+		return "same level"
+	case LessonPlanEditLevelLevelFour:
+		return "1 level higher"
+	case LessonPlanEditLevelLevelFive:
+		return "2 levels higher"
+	default:
+		return "same level"
+	}
+}
+
+// api/lesson_plan/repository.go
+package lessonplan
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/class"
+	"github.com/MathGaps/resources/api/common"
+	"github.com/MathGaps/resources/api/question"
+	"github.com/MathGaps/resources/api/resource"
+	"github.com/MathGaps/resources/api/skill"
+	"github.com/MathGaps/resources/api/subtopic"
+	"github.com/MathGaps/resources/api/topic"
+	"github.com/MathGaps/resources/api/year"
+	"github.com/samber/lo"
+	"github.com/samber/oops"
+)
+
+type Repository interface {
+	Get(ctx context.Context, id id.ID) (*resource.LessonPlan, error)
+	CreateLessonPlanForIndividual(ctx context.Context, input CreateLessonPlanForIndividualInput) (*resource.LessonPlan, error)
+	CreateLessonPlanForClass(ctx context.Context, classID id.ID, input CreateLessonPlanForClassInput) (*resource.LessonPlan, error)
+	CreateLessonPlanForIndividualV3(ctx context.Context, input CreateLessonPlanInputV3) (*resource.LessonPlan, error)
+	CreateLessonPlanForClassV3(ctx context.Context, classID id.ID, input CreateLessonPlanInputV3) (*resource.LessonPlan, error)
+	UpdateLessonPlanForIndividualV3(ctx context.Context, input UpdateLessonPlanInputV3) (*resource.LessonPlan, error)
+	UpdateLessonPlanForClassV3(ctx context.Context, classID id.ID, input UpdateLessonPlanInputV3) (*resource.LessonPlan, error)
+	DeleteLessonPlan(ctx context.Context, lessonPlanID id.ID) (bool, error)
+	DeleteByIDs(ctx context.Context, lessonPlanIDs []id.ID) (bool, error)
+	TransferLessonPlanToClass(ctx context.Context, teacherID, classID id.ID) error
+	ImportLessonPlan(ctx context.Context, lessonPlanID id.ID, isClass bool) (*resource.LessonPlan, error)
+	SearchLessonPlanContexts(ctx context.Context, query string) ([]*LessonPlanContext, error)
+	FetchLessonPlanContext(ctx context.Context, input string) (*LessonPlanContext, error)
+	UpdateLessonPlanContext(ctx context.Context, id id.ID, input string, excludedTypes []LessonPlanNodeType, checkReady bool) (*resource.LessonPlan, error)
+	UpdateLessonPlanName(ctx context.Context, lessonPlanID id.ID, name string) (*resource.LessonPlan, error)
+	UpdateLessonPlanCoverImage(ctx context.Context, lessonPlanID id.ID, name string) (*resource.LessonPlan, error)
+	UpdateWorksheetPlanCoverImage(ctx context.Context, lessonPlanID id.ID, imageUrl string) (*resource.WorksheetPlan, error)
+	UpdateLessonPlanApplicationImage(ctx context.Context, nodeID id.ID, url string) (*resource.LessonPlan, error)
+	UpdateLessonPlanNodeImage(ctx context.Context, nodeID id.ID, url string) (_ LessonPlanNode, err error)
+	UpdateLessonPlanState(ctx context.Context, id id.ID, state LessonPlanState) (*resource.LessonPlan, error)
+	LessonPlanContexts(ctx context.Context, id id.ID) ([]*LessonPlanContext, error)
+	LessonPlanContextsBySkills(ctx context.Context, skillIDs []id.ID) ([]*LessonPlanContext, error)
+	SelectedLessonPlanContext(ctx context.Context, id id.ID) (*LessonPlanContext, error)
+	GetLessonPlanCountForTopic(ctx context.Context, topicID id.ID) (int, error)
+	GetLessonPlanCountForSubtopic(ctx context.Context, subtopicID id.ID) (int, error)
+	GetLessonPlanCountForSkill(ctx context.Context, skillID id.ID) (int, error)
+	HasLessonPlans(ctx context.Context, topicID, subtopicID id.ID) (bool, error)
+	GetCurriculumMetadata(ctx context.Context, lessonPlanID id.ID) (*subtopic.CurriculumMetadata, error)
+
+	CreateLessonPlanFromPrompt(ctx context.Context, classID id.ID, prompt string) (*resource.LessonPlan, error)
+	GenerateWorksheetAndDocumentation(ctx context.Context, input GenerateWorksheetAndDocumentationInput) (err error)
+	ProcessLessonPlanUpdate(ctx context.Context, input UpdateLessonPlanInputV3, userID id.ID) error
+	GetState(ctx context.Context, id id.ID) (LessonPlanState, error)
+	GetTopic(ctx context.Context, id id.ID) (*topic.BaseTopic, error)
+	GetTopics(ctx context.Context, id id.ID) ([]*topic.BaseTopic, error)
+	GetSubtopic(ctx context.Context, id id.ID) (*subtopic.Subtopic, error)
+	GetSubtopics(ctx context.Context, id id.ID) ([]*subtopic.Subtopic, error)
+	GetYear(ctx context.Context, id id.ID) (*year.Year, error)
+	GetLessonPlanClass(ctx context.Context, lessonPlanID id.ID) (*class.Class, error)
+	GetForSubtopic(ctx context.Context, topicID *id.ID, subtopicID id.ID, includeIndirect bool) ([]*resource.LessonPlan, error)
+	GetLessonPlan(ctx context.Context, topicID, subtopicID id.ID) (*resource.LessonPlan, error)
+	IsExisting(ctx context.Context, input LessonPlanInput) (bool, error)
+	UpdateStatus(ctx context.Context, lessonPlanID id.ID, ready bool) (*resource.LessonPlan, error)
+	UpdateLessonStatus(ctx context.Context, inputs []*UpdateLessonStatusInput) (*resource.LessonPlan, error)
+	UpdateNodeStatus(ctx context.Context, nodeIDs []id.ID, ready bool) (*resource.LessonPlan, error)
+	TotalNodesCount(ctx context.Context, id id.ID) (int, error)
+	TaughtNodesCount(ctx context.Context, id id.ID) (int, error)
+	FlaggedSkillsCount(ctx context.Context, id id.ID) (int, error)
+	GetLessons(ctx context.Context, id id.ID) ([]*Lesson, error)
+
+	GetCurrentNode(ctx context.Context, id id.ID) (LessonPlanNode, error)
+	PreviousLessonPlanNode(ctx context.Context, id id.ID) (LessonPlanNode, error)
+	NextLessonPlanNode(ctx context.Context, id id.ID) (LessonPlanNode, error)
+	SelectLessonPlanNode(ctx context.Context, id, nodeID id.ID) (LessonPlanNode, error)
+	RestartLessonPlan(ctx context.Context, id id.ID) (LessonPlanNode, error)
+
+	GetLesson(ctx context.Context, lessonID id.ID) (*Lesson, error)
+	GetSingleLesson(ctx context.Context, lessonPlanID id.ID) (*Lesson, error)
+	GetLessonPlanNodeIDs(ctx context.Context, lessonPlanID id.ID) ([]id.ID, error)
+	GetNodes(ctx context.Context, lessonID id.ID) (out []LessonPlanNode, err error)
+	ToggleNodesByType(ctx context.Context, lessonPlanID id.ID, inputs []*ToggleNodesByTypeInput) (*resource.LessonPlan, error)
+	GetNodeByIndex(ctx context.Context, lessonID id.ID, index int) (LessonPlanNode, error)
+	GetSection(ctx context.Context, sectionID id.ID) (LessonSection, error)
+	GetSections(ctx context.Context, lessonID id.ID) ([]LessonSection, error)
+	GetSectionConfigs(ctx context.Context, sectionID id.ID) (LessonPlanConfigs, error)
+	GetSectionNodes(ctx context.Context, sectionID id.ID) ([]LessonPlanNode, error)
+	GetSectionDuration(ctx context.Context, sectionID id.ID) (time.Duration, error)
+	GetLessonConfigs(ctx context.Context, lessonID id.ID) (LessonPlanConfigs, error)
+	GetSectionSkill(ctx context.Context, skillSectionID id.ID) (*skill.Skill, error)
+	UpdateLessonDuration(ctx context.Context, lessonID id.ID, duration time.Duration) (*Lesson, error)
+	UpdateLessonElapsedDuration(ctx context.Context, lessonID id.ID, duration time.Duration) (*Lesson, error)
+	UpdateLessonSectionDuration(ctx context.Context, lessonSectionID id.ID, duration time.Duration) (LessonSection, error)
+	ReorderLessonSections(ctx context.Context, lessonID id.ID, sectionIDs []id.ID) ([]LessonSection, error)
+	GetEnabledNodeTypes(ctx context.Context, lessonPlanID id.ID, forDocumentation bool) ([]LessonPlanNodeType, error)
+	GetHiddenNodes(ctx context.Context, lessonPlanID id.ID) ([]LessonPlanNode, error)
+	DeleteLesson(ctx context.Context, lessonID id.ID) (string, error)
+
+	MoveNodeToSection(ctx context.Context, nodeID, sectionID id.ID, index int) (LessonPlanNode, error)
+	DuplicateNode(ctx context.Context, nodeID id.ID) (LessonPlanNode, error)
+
+	// GetNodeDataReconciler fetches the reconciler for the input node from the dig container,
+	// which is not thread safe. So this method should not be called inside goroutines.
+	GetNodeDataReconciler(ctx context.Context, input GetNodeDataReconcilerInput) (ReconcilerFunc, error)
+	// GetBatchNodeDataReconciler fetches the reconciler for batch processing of nodes from the dig container,
+	// which is not thread safe. So this method should not be called inside goroutines.
+	GetBatchNodeDataReconciler(ctx context.Context, input GetNodeDataReconcilerInput) (ReconcilerFunc, error)
+	UpdateLessonPlanNodeDirtyState(ctx context.Context, lessonPlanID, lessonPlanNodeID id.ID, dirty bool) error
+	ShouldGenerateNode(ctx context.Context, lessonPlanNodeID id.ID, context string) (bool, error)
+	RegenerateNodeData(ctx context.Context, lessonPlan resource.LessonPlan, nodes []LessonPlanNode) error
+	RetryNodeReconciler(ctx context.Context, reconciler ReconcilerFunc, lessonPlanID, lessonPlanNodeID id.ID, lpContext string)
+
+	GetSkills(ctx context.Context, lessonPlanID id.ID) ([]*skill.Skill, error)
+	GetExcludedSkills(ctx context.Context, lessonPlanID id.ID, includedSkillIDs []id.ID, class bool) ([]id.ID, error)
+	// SearchSkills performs a vector search for the closest skills to the input query
+	// When query is empty, it returns most similar skills to the skills linked to lesson plan
+	SearchSkills(ctx context.Context, lessonID id.ID, query string, options common.OffsetPaginationOptions, scoreThreshold float64) ([]*skill.Skill, error)
+	GetQuestionsForLessonSkills(ctx context.Context, lessonID id.ID, ignoredQuestions []id.ID, questionCount int) ([]*question.Question, error)
+	// UpdateSkillRecommendation computes and stores default skill recommendation for lesson plan
+	UpdateSkillRecommendation(ctx context.Context, lessonPlanID id.ID) error
+	IsFlagged(ctx context.Context, lessonID, skillID id.ID) (bool, error)
+	IsTaught(ctx context.Context, lessonID, skillID id.ID) (bool, error)
+	TeachSkill(ctx context.Context, lessonID, skillID id.ID) (*LessonTaughtSkillEdge, error)
+	UnteachSkill(ctx context.Context, lessonID, skillID id.ID) (*LessonTaughtSkillEdge, error)
+	FlagSkill(ctx context.Context, lessonID, skillID id.ID) (*LessonFlaggedSkillEdge, error)
+	UnflagSkill(ctx context.Context, lessonID, skillID id.ID) (*LessonFlaggedSkillEdge, error)
+
+	SubmitFeedbackOnNotes(ctx context.Context, id id.ID, input SubmitFeedbackOnNotesInput) (bool, error)
+
+	GetContextTypes(ctx context.Context) ([]*LessonPlanContextType, error)
+	GetContextsOfType(ctx context.Context, typeID string) ([]*LessonPlanContext, error)
+	GetContextById(ctx context.Context, ID id.ID) (*LessonPlanContext, error)
+	GetContextType(ctx context.Context, id id.ID) (*LessonPlanContextType, error)
+
+	// TODO: Refactor to a new repo
+	GenerateLessonWorksheet(ctx context.Context, lessonID id.ID, input GenerateLessonWorksheetInput) (*LessonWorksheet, error)
+	GetLessonWorksheet(ctx context.Context, lessonID id.ID) (*LessonWorksheet, error)
+	GetLessonWorksheetNodes(ctx context.Context, worksheetID id.ID) ([]LessonWorksheetNode, error)
+	GetWorksheet(ctx context.Context, worksheetID id.ID) (*LessonWorksheet, error)
+	DeleteWorksheet(ctx context.Context, worksheetID id.ID) (*LessonWorksheet, error)
+	DeleteAllLessonPlanWorksheets(ctx context.Context, lessonPlanID id.ID) ([]*LessonWorksheet, error)
+	ToggleWorksheetNodes(ctx context.Context, worksheetID id.ID, nodeIDs []id.ID) ([]LessonWorksheetNode, error)
+	EnabledForWorkSheet(ctx context.Context, nodeID id.ID) (bool, error)
+
+	GetWorksheetPlan(ctx context.Context, worksheetID id.ID) (*resource.WorksheetPlan, error)
+	GetWorksheetPlansForTopic(ctx context.Context, topicID id.ID) ([]*resource.WorksheetPlan, error)
+	UpdateWorksheetPlan(ctx context.Context, classID *id.ID, input CreateWorksheetPlanInput) (*resource.WorksheetPlan, error)
+	CreateWorksheetPlan(ctx context.Context, classID *id.ID, input CreateWorksheetPlanInput) (*resource.WorksheetPlan, error)
+	CreateWorksheetPlanForIndividualV2(ctx context.Context, input CreateWorksheetPlanInput) (*resource.WorksheetPlan, error)
+	CreateWorksheetPlanForClassV2(ctx context.Context, classID id.ID, input CreateWorksheetPlanInput) (*resource.WorksheetPlan, error)
+	UpdateWorksheetPlanForIndividualV2(ctx context.Context, input UpdateWorksheetPlanInput) (*resource.WorksheetPlan, error)
+	UpdateWorksheetPlanForClassV2(ctx context.Context, classID id.ID, input UpdateWorksheetPlanInput) (*resource.WorksheetPlan, error)
+	GetWorksheetPlanConfiguration(ctx context.Context, worksheetID id.ID) (*WorksheetPlanConfiguration, error)
+	GetWorksheetPlanNodeConfig(ctx context.Context, nodeID id.ID) (*WorksheetPlanNodeConfig, error)
+	GetSectionsForWorksheetPlan(ctx context.Context, worksheetID id.ID) ([]LessonSection, error)
+	AvailableNodeTypesForWorksheetPlan(ctx context.Context, worksheetID id.ID) ([]LessonPlanNodeType, error)
+	AvailableSkillNodesForWorksheetPlan(ctx context.Context, worksheetID id.ID) ([]*AvailableSkillNode, error)
+	AddQuestionsToWorksheetPlan(ctx context.Context, worksheetPlanID id.ID, inputs []*AddQuestionToWorksheetPlanInput) (*resource.WorksheetPlan, error)
+	AddNodesToWorksheetPlan(ctx context.Context, worksheetID id.ID, inputs []*AddNodeInput) (*resource.WorksheetPlan, error)
+	RemoveNodesFromWorksheetPlan(ctx context.Context, worksheetPlanID id.ID, nodeIDs []id.ID) (*resource.WorksheetPlan, error)
+
+	UpdateWorksheetPlanConfiguration(ctx context.Context, worksheetPlanID id.ID, input UpdateWorksheetPlanConfigurationInput) (*resource.WorksheetPlan, error)
+	UpdateWorksheetPlanNodeConfig(ctx context.Context, nodeID id.ID, input WorksheetPlanNodeConfigInput) (*WorksheetPlanNodeConfig, error)
+	UpdateVisibility(ctx context.Context, id id.ID, public bool) error
+	UpdateReplicability(ctx context.Context, id id.ID, replicable bool) error
+	ShareWithUser(ctx context.Context, id id.ID, userID id.ID) error
+	GetLessonPlanSharePermissions(ctx context.Context, lessonPlanID id.ID) (*LessonPlanSharePermissions, error)
+	UpdateNodeTitle(ctx context.Context, nodeID id.ID, title string) (LessonPlanNode, error)
+	GetLessonPlanClassName(ctx context.Context, lessonPlanID id.ID) (*string, error)
+
+	AddSkillSlides(ctx context.Context, lessonPlanID id.ID, inputs []*AddSkillSlideInput) (*resource.LessonPlan, error)
+	AddTeacherQuestions(ctx context.Context, lessonPlanID id.ID, inputs []*AddTeacherQuestionInput) (*resource.LessonPlan, error)
+
+	// Deprecated APIs
+	UpdateLessonPlanDuration(ctx context.Context, id id.ID, duration time.Duration) (*resource.LessonPlan, error)
+	UpdateLessonPlanElapsedDuration(ctx context.Context, id id.ID, duration time.Duration) (*resource.LessonPlan, error)
+	NormalizeNodeDurations(ctx context.Context, input NormalizeNodeDurationsInput) error
+	UpdateCanToggle(ctx context.Context, lessonID id.ID) (err error)
+	GetLessonPlanConfigs(ctx context.Context, id id.ID) (LessonPlanConfigs, error)
+	AddNodes(ctx context.Context, lessonPlanID, lessonID id.ID, inputs []*AddNodeInput) (*resource.LessonPlan, error)
+	AvailableNodeTypes(ctx context.Context, lessonID id.ID) ([]LessonPlanNodeType, error)
+	AvailableSkillNodes(ctx context.Context, lessonID id.ID) ([]*AvailableSkillNode, error)
+	AllLessonPlans(ctx context.Context) ([]*resource.LessonPlan, error)
+	AllWorksheetPlans(ctx context.Context) ([]*resource.WorksheetPlan, error)
+	CanFlex(ctx context.Context, lessonID id.ID, currentDuration, desiredDuration time.Duration) (bool, error)
+}
+
+type LessonPlanImageRepository interface {
+	// GetIntroductionImage retrieves a specific introduction image by index.
+	// 0th Index: Contains either old portrait image or newly snapshotted image
+	// 1st Index: Contains introduction image uploaded for the context (by content team)
+	// Falls back to subtopic cover image if index is out of bounds.
+	GetIntroductionImage(ctx context.Context, id id.ID, introductionImageIndex int) (string, error)
+	GetNoContextSubtopicCoverImage(ctx context.Context, id id.ID) (string, error)
+	GetLandscapeImage(ctx context.Context, id id.ID, secondImage bool, nodeType *string) (string, error)
+	GetLandscapeImages(ctx context.Context, id id.ID, context string) ([]string, error)
+	GetPortraitImages(ctx context.Context, id id.ID, context string) ([]string, error)
+	GetVerticalCoverImage(ctx context.Context, id id.ID) (string, error)
+	RequestLessonPlanCoverImageGeneration(ctx context.Context, lessonPlanID id.ID) (bool, error)
+}
+
+type LessonPlanInput struct {
+	UserID     id.ID
+	TopicID    id.ID
+	SubtopicID id.ID
+	YearID     id.ID
+}
+
+type ToggleNodesByTypeInput struct {
+	Type LessonPlanNodeType `json:"type"`
+	// Nil value leaves the status as is
+	Enable *bool `json:"enable"`
+}
+
+type LessonPlanInput2 struct {
+	IsClass   bool
+	SkillIDs  []id.ID
+	YearID    id.ID
+	YearOrder int32
+	FolderID  *id.ID
+}
+
+type SetupLessonsInput struct {
+	ClassID          *id.ID
+	LessonPlanID     id.ID
+	Durations        []time.Duration
+	IncludeNodes     []LessonPlanNodeType `json:"includeNodes"`
+	SkillIDs         []id.ID              `json:"skillIDs"`
+	ExcludedSkillIDs []id.ID              `json:"excludedSkillIDs"`
+}
+
+// Use CreateLessonPlanInput with existingLessonPlanId to update an existing lesson plan.
+// Use WorksheetPlanConfiguration to configure a LessonPlan as a WorksheetPlan.
+type CreateLessonPlanInput struct {
+	ExistingLessonPlanID       *id.ID
+	WorksheetPlanConfiguration *WorksheetPlanConfiguration
+	Durations                  []time.Duration
+	IncludeNodes               []LessonPlanNodeType `json:"includeNodes"`
+	SkillIDs                   []id.ID              `json:"skillIDs"`
+
+	SubtopicID id.ID  `json:"subtopicID"`
+	Context    string `json:"context"`
+	Name       string `json:"name"`
+	FolderID   *id.ID `json:"folderID"`
+}
+
+type CreateLessonPlanForIndividualInput struct {
+	LessonCount int                   `json:"lessonCount"`
+	Input       CreateLessonPlanInput `json:"input"`
+}
+
+type CreateLessonPlanForClassInput struct {
+	LessonDurations []time.Duration       `json:"lessonDurations"`
+	Input           CreateLessonPlanInput `json:"input"`
+}
+
+type NormalizeNodeDurationsInput struct {
+	Lesson *Lesson
+}
+
+type AddTeacherQuestionInput struct {
+	Title      string
+	SkillID    id.ID
+	QuestionID id.ID
+}
+
+type AddSkillSlideInput struct {
+	Title           string
+	SkillID         id.ID
+	SkillTemplateID id.ID
+}
+
+type FeedbackType string
+
+const (
+	FeedbackTypeGrammarError         FeedbackType = "GRAMMAR_ERROR"
+	FeedbackTypeEmbedError           FeedbackType = "EMBED_ERROR"
+	FeedbackTypeIncorrectInformation FeedbackType = "INCORRECT_INFORMATION"
+	FeedbackTypeOther                FeedbackType = "OTHER"
+)
+
+type SubmitFeedbackOnNotesInput struct {
+	SkillID      id.ID
+	Feedback     string
+	FeedbackType FeedbackType
+}
+
+type UpdateLessonStatusInput struct {
+	LessonID id.ID `json:"lessonID"`
+	Ready    bool  `json:"ready"`
+}
+
+type GenerateLessonWorksheetInput struct {
+	NoteSpaceEnabled                  bool `json:"noteSpaceEnabled"`
+	WarmUpQuestionsEnabled            bool `json:"warmUpQuestionsEnabled"`
+	WarmUpQuestionsWithContextEnabled bool `json:"warmUpQuestionsWithContextEnabled"`
+	ThoughtSparkerEnabled             bool `json:"thoughtSparkerEnabled"`
+	ExitTicketEnabled                 bool `json:"exitTicketEnabled"`
+	ContemplativeQuestionEnabled      bool `json:"contemplativeQuestionEnabled"`
+	ActivityEnabled                   bool `json:"activityEnabled"`
+	WorkingOutSpaceEnabled            bool `json:"workingOutSpaceEnabled"`
+	NotesPageEnabled                  bool `json:"notesPageEnabled"`
+	ReducePaperEnabled                bool `json:"reducePaperEnabled"`
+	ClassQuestionsEnabled             bool `json:"classQuestionsEnabled"`
+	StudentQuestionsEnabled           bool `json:"studentQuestionsEnabled"`
+	BrainTeaserEnabled                bool `json:"brainTeaserEnabled"`
+	MathsDebateEnabled                bool `json:"mathsDebateEnabled"`
+	SituationalQuestionEnabled        bool `json:"situationalQuestionEnabled"`
+	ScaffoldedQuestionEnabled         bool `json:"scaffoldedQuestionEnabled"`
+	ShortAnswerQuestionEnabled        bool `json:"shortAnswerQuestionEnabled"`
+	MultipleChoiceQuestionEnabled     bool `json:"multipleChoiceQuestionEnabled"`
+	MisconceptionQuestionEnabled      bool `json:"misconceptionQuestionEnabled"`
+	LearningGoalsEnabled              bool `json:"learningGoalsEnabled"`
+	IntroductionEnabled               bool `json:"introductionEnabled"`
+
+	// LessonStarterEnabled is no longer used, use class/student questions enabled instead
+	PracticeQuestionsEnabled bool `json:"practiceQuestionsEnabled"`
+	// LessonStarterEnabled is no longer used, use WarmUpQuestionsEnabled and ThoughtSparkerEnabled instead
+	LessonStarterEnabled bool `json:"lessonStarterEnabled"`
+	// LessonStarterEnabled is no longer used, use ExitTicketEnabled and ContemplativeQuestionEnabled instead
+	WrapUpActivityEnabled bool `json:"wrapUpActivityEnabled"`
+}
+
+type LessonPlanContextCachekey struct {
+	Context string
+}
+
+func (lck LessonPlanContextCachekey) String() string {
+	return fmt.Sprintf("lesson-plan-context:%s", lck.Context)
+}
+
+type AddNodeInput struct {
+	SectionID            id.ID                     `json:"sectionID"`
+	Type                 *LessonPlanNodeType       `json:"type"`
+	Title                *string                   `json:"title,omitempty"`
+	SelectedContext      *string                   `json:"selectedContext,omitempty"`
+	LessonPlanCardInputs []LessonPlanCardNodeInput `json:"lessonPlanCardInputs"`
+	StudentQuestions     []string                  `json:"studentQuestions"`
+	TeacherQuestions     []string                  `json:"teacherQuestions"`
+	BrainTeasers         []string                  `json:"brainTeasers"`
+	SkillSlides          []string                  `json:"skillSlides"`
+	Image                *string                   `json:"image,omitempty"`
+}
+
+func (i AddNodeInput) Validate() error {
+	if i.IsEmpty() {
+		return fmt.Errorf("at least one field must be provided")
+	}
+
+	// * Make sure either type is provided or other inputs are provided
+	if i.Type != nil && (len(i.LessonPlanCardInputs) > 0 || len(i.StudentQuestions) > 0 || len(i.TeacherQuestions) > 0 || len(i.BrainTeasers) > 0 || len(i.SkillSlides) > 0) {
+		return fmt.Errorf("either type or other inputs must be provided")
+	}
+
+	return nil
+}
+
+func (i AddNodeInput) IsEmpty() bool {
+	return i.Type == nil && len(i.LessonPlanCardInputs) == 0 && len(i.StudentQuestions) == 0 && len(i.TeacherQuestions) == 0 && len(i.BrainTeasers) == 0 && len(i.SkillSlides) == 0
+}
+
+func (i AddNodeInput) RequiresContext() bool {
+	//* All types require context except for LearningGoals, LessonAgenda
+	return i.Type != nil && !lo.Contains(LessonGoalsTypes, *i.Type)
+}
+
+type AvailableSkillNode struct {
+	SkillID             id.ID `json:"skillID"`
+	HasSlide            bool  `json:"hasSlide"`
+	CanAddSlide         bool  `json:"canAddSlide"`
+	HasTeacherQuestions bool  `json:"hasTeacherQuestions"`
+	HasStudentQuestions bool  `json:"hasStudentQuestions"`
+}
+
+type CreateWorksheetPlanInput struct {
+	ExistingWorksheetPlanID *id.ID
+	Name                    string                          `json:"name"`
+	SubtopicID              id.ID                           `json:"subtopicID"`
+	Context                 string                          `json:"context"`
+	SkillIDs                []id.ID                         `json:"skillIDs"`
+	Configuration           WorksheetPlanConfigurationInput `json:"configuration"`
+	IncludeNodes            []LessonPlanNodeType            `json:"includeNodes"`
+	FolderID                *id.ID                          `json:"folderID"`
+}
+
+type UpdateWorksheetPlanInput struct {
+	WorksheetPlanID id.ID                           `json:"worksheetPlanID"`
+	UpdateType      WorksheetPlanUpdateType         `json:"updateType"`
+	Name            *string                         `json:"name,omitempty"`
+	SubtopicID      *id.ID                          `json:"subtopicID,omitempty"`
+	Context         *string                         `json:"context,omitempty"`
+	SkillIDs        []id.ID                         `json:"skillIDs,omitempty"`
+	Configuration   WorksheetPlanConfigurationInput `json:"configuration"`
+	IncludeNodes    []LessonPlanNodeType            `json:"includeNodes,omitempty"`
+	FolderID        *id.ID                          `json:"folderID,omitempty"`
+}
+
+func (i *UpdateWorksheetPlanInput) Validate() error {
+	if i.Configuration.Validate() != nil {
+		return oops.Errorf("invalid configuration")
+	}
+	if len(i.SkillIDs) == 0 && i.UpdateType != WorksheetPlanUpdateTypeGenerateQuestion {
+		return oops.Errorf("skill IDs must be provided")
+	}
+	return nil
+}
+
+type WorksheetPlanConfigurationInput struct {
+	Type                      resource.WorksheetPlanType    `json:"type"`
+	QuestionCount             int                           `json:"questionCount"`
+	AverageQuestionDifficulty float64                       `json:"averageQuestionDifficulty"`
+	WorkingOutSpaceEnabled    bool                          `json:"workingOutSpaceEnabled"`
+	ReducePaperEnabled        bool                          `json:"reducePaperEnabled"`
+	WorksheetLength           int                           `json:"worksheetLength"`
+	TextSize                  int                           `json:"textSize"`
+	ImageSize                 int                           `json:"imageSize"`
+	SectionHeadersEnabled     bool                          `json:"sectionHeadersEnabled"`
+	QuestionDifficultyEnabled bool                          `json:"questionDifficultyEnabled"`
+	ShowAnswerArea            bool                          `json:"showAnswerArea"`
+	ShowClassName             bool                          `json:"showClassName"`
+	ExplanationSpace          int                           `json:"explanationSpace"`
+	QuestionTypeEnabled       bool                          `json:"questionTypeEnabled"`
+	AnswersEnabled            bool                          `json:"answersEnabled"`
+	NodeCounts                []WorksheetPlanNodeCountInput `json:"nodeCounts"`
+	MaxDifficulty             *int                          `json:"maxDifficulty"`
+	MinDifficulty             *int                          `json:"minDifficulty"`
+}
+
+func (c *WorksheetPlanConfigurationInput) Validate() error {
+	if c.MinDifficulty == nil || c.MaxDifficulty == nil {
+		return oops.Errorf("worksheets must have min and max difficulty")
+	}
+	if *c.MinDifficulty > *c.MaxDifficulty {
+		return oops.Errorf("min difficulty must be less than max difficulty")
+	}
+	if len(c.NodeCounts) == 0 {
+		return oops.Errorf("at least one node count must be provided")
+	}
+	return nil
+}
+
+func (w WorksheetPlanConfigurationInput) LessonPlanNodeCountMap() map[LessonPlanNodeType]int {
+	m := make(map[LessonPlanNodeType]int)
+	for _, n := range w.NodeCounts {
+		if n.NodeType != nil {
+			m[*n.NodeType] += n.Count
+		}
+	}
+	return m
+}
+
+func (w WorksheetPlanConfigurationInput) PopulateQuestionCount(config *WorksheetPlanConfiguration) *WorksheetPlanConfiguration {
+	for _, n := range w.NodeCounts {
+		if n.QuestionType == nil {
+			continue
+		}
+		switch *n.QuestionType {
+		case WorksheetQuestionTypeMultipleChoice:
+			config.MultiQuestionCount += n.Count
+		case WorksheetQuestionTypeShortAnswer:
+			config.ShortAnswerQuestionCount += n.Count
+		case WorksheetQuestionTypeOpenEnded:
+			config.OpenEndedQuestionCount += n.Count
+		}
+	}
+	return config
+}
+
+type LessonPlanCacheInput struct {
+	LessonPlanID id.ID
+	UserID       id.ID
+	TopicID      id.ID
+	SubtopicID   id.ID
+}
+
+type LessonPlanEditConfigInput struct {
+	Difficulty         *LessonPlanEditLevel `json:"difficulty,omitempty"`
+	ReadingLevel       *LessonPlanEditLevel `json:"readingLevel,omitempty"`
+	Length             *LessonPlanEditLevel `json:"length,omitempty"`
+	Emoji              *LessonPlanEditLevel `json:"emoji,omitempty"`
+	SelectedObjectives []string             `json:"selectedObjectives,omitempty"`
+	SelectedContext    *string              `json:"selectedContext,omitempty"`
+	DifficultyType     *Difficulty          `json:"difficultyType,omitempty"`
+}
+
+type LessonPlanEditInput struct {
+	SliderInput        *LessonPlanEditSliderInput `json:"sliderInput,omitempty"`
+	SelectedObjectives []id.ID                    `json:"selectedObjectives,omitempty"`
+	SelectedContext    *string                    `json:"selectedContext,omitempty"`
+	CustomInstructions *string                    `json:"customInstructions,omitempty"`
+	NodeType           LessonPlanNodeType
+	Difficulty         *Difficulty
+}
+
+type LessonPlanEditSliderInput struct {
+	Difficulty   *LessonPlanEditLevel `json:"difficulty,omitempty"`
+	ReadingLevel *LessonPlanEditLevel `json:"readingLevel,omitempty"`
+	Length       *LessonPlanEditLevel `json:"length,omitempty"`
+	Emoji        *LessonPlanEditLevel `json:"emoji,omitempty"`
+}
+
+type UpdateWorksheetPlanConfigurationInput struct {
+	WorksheetLength           *int  `json:"worksheetLength,omitempty"`
+	TextSize                  *int  `json:"textSize,omitempty"`
+	ImageSize                 *int  `json:"imageSize,omitempty"`
+	SectionHeadersEnabled     *bool `json:"sectionHeadersEnabled,omitempty"`
+	QuestionDifficultyEnabled *bool `json:"questionDifficultyEnabled,omitempty"`
+	ShowAnswerArea            *bool `json:"showAnswerArea,omitempty"`
+	ShowClassName             *bool `json:"showClassName,omitempty"`
+	ExplanationSpace          *int  `json:"explanationSpace,omitempty"`
+	QuestionTypeEnabled       *bool `json:"questionTypeEnabled,omitempty"`
+	AnswersEnabled            *bool `json:"answersEnabled,omitempty"`
+}
+
+type (
+	WorksheetQuestionType   string
+	WorksheetPlanUpdateType string
+)
+
+const (
+	WorksheetQuestionTypeMultipleChoice WorksheetQuestionType = "MULTI"
+	WorksheetQuestionTypeShortAnswer    WorksheetQuestionType = "SHORT"
+	WorksheetQuestionTypeOpenEnded      WorksheetQuestionType = "OPEN_ENDED"
+
+	WorksheetPlanUpdateTypeGenerateQuestion WorksheetPlanUpdateType = "GENERATE_QUESTION"
+	WorksheetPlanUpdateTypeChangeSkill      WorksheetPlanUpdateType = "CHANGE_SKILL"
+	WorksheetPlanUpdateTypeChangeDifficulty WorksheetPlanUpdateType = "CHANGE_DIFFICULTY"
+)
+
+type WorksheetPlanNodeCountInput struct {
+	NodeType     *LessonPlanNodeType    `json:"nodeType,omitempty"`
+	QuestionType *WorksheetQuestionType `json:"questionType,omitempty"`
+	Count        int                    `json:"count"`
+}
+
+type LessonPlanSharePermissions struct {
+	OwnerID         id.ID `json:"ownerID"`
+	IsCopyable      bool  `json:"isCopyable"`
+	IsPublic        bool  `json:"isPublic"`
+	IsOwner         bool  `json:"isOwner"`
+	CanRead         bool  `json:"canRead"`
+	SharedWithClass bool  `json:"sharedWithClass"`
+}
+
+type WorksheetPlanNodeConfig struct {
+	SectionLength int `json:"sectionLength"`
+	TextSize      int `json:"textSize"`
+	ImageSize     int `json:"imageSize"`
+	ColumnCount   int `json:"columnCount"`
+}
+
+type WorksheetPlanNodeConfigInput struct {
+	SectionLength *int `json:"sectionLength,omitempty"`
+	TextSize      *int `json:"textSize,omitempty"`
+	ImageSize     *int `json:"imageSize,omitempty"`
+	ColumnCount   *int `json:"columnCount,omitempty"`
+}
+
+type LessonPlansForSubtopicInput struct {
+	TopicID         string `json:"topicID"`
+	SubtopicID      string `json:"subtopicID"`
+	UserID          string `json:"userID"`
+	IncludeIndirect bool
+}
+
+type GenerateWorksheetAndDocumentationInput struct {
+	LessonPlanID            id.ID
+	LessonIDs               []id.ID
+	RegenerateDocumentation bool
+}
+
+type AddQuestionToWorksheetPlanInput struct {
+	SkillID    id.ID `json:"skillID"`
+	QuestionID id.ID `json:"questionID"`
+	Index      int   `json:"index"`
+}
+
+// api/lesson_plan/worksheet_edit.go
+package lessonplan
+
+import (
+	"github.com/MathGaps/resources/api/question"
+	"github.com/samber/lo"
+	"github.com/samber/oops"
+)
+
+// WorksheetEditDifficulty represents ordered difficulty levels.
+// 0: ENABLING, 1: EASY, 2: MEDIUM, 3: HARD, 4: EXTENSION
+type WorksheetEditDifficulty int
+
+const (
+	WorksheetEditDifficultyEnabling WorksheetEditDifficulty = 0
+	WorksheetEditDifficultyEasy     WorksheetEditDifficulty = 1
+	WorksheetEditDifficultyMedium   WorksheetEditDifficulty = 2
+	WorksheetEditDifficultyHard     WorksheetEditDifficulty = 3
+	WorksheetEditDifficultyExt      WorksheetEditDifficulty = 4
+)
+
+func (d WorksheetEditDifficulty) ToLessonPlanDifficulty() (Difficulty, error) {
+	switch d {
+	case WorksheetEditDifficultyEnabling:
+		return DifficultyEnabling, nil
+	case WorksheetEditDifficultyEasy:
+		return DifficultyMild, nil
+	case WorksheetEditDifficultyMedium:
+		return DifficultyHot, nil
+	case WorksheetEditDifficultyHard:
+		return DifficultySpicy, nil
+	case WorksheetEditDifficultyExt:
+		return DifficultyExtension, nil
+	default:
+		return "", oops.Errorf("invalid lesson plan difficulty for worksheet difficulty `%d`", d)
+	}
+}
+
+func (d WorksheetEditDifficulty) ToQuestionDifficulty() (question.QuestionDifficulty, error) {
+	switch d {
+	case WorksheetEditDifficultyEasy:
+		return question.QuestionDifficultyEasy, nil
+	case WorksheetEditDifficultyMedium:
+		return question.QuestionDifficultyMedium, nil
+	case WorksheetEditDifficultyHard:
+		return question.QuestionDifficultyHard, nil
+	case WorksheetEditDifficultyExt:
+		return question.QuestionDifficultyExtension, nil
+	default:
+		return "", oops.Errorf("unknown question difficulty for worksheet difficulty %d", d)
+	}
+}
+
+func WorksheetEditDifficultyFromQuestionDifficulty(d question.QuestionDifficulty) (WorksheetEditDifficulty, error) {
+	switch d {
+	case question.QuestionDifficultyEasy:
+		return WorksheetEditDifficultyEasy, nil
+	case question.QuestionDifficultyMedium:
+		return WorksheetEditDifficultyMedium, nil
+	case question.QuestionDifficultyHard:
+		return WorksheetEditDifficultyHard, nil
+	case question.QuestionDifficultyExtension:
+		return WorksheetEditDifficultyExt, nil
+	default:
+		return 0, oops.Errorf("unknown question difficulty %s", d)
+	}
+}
+
+func WorksheetEditDifficultyFromLessonPlanDifficulty(d Difficulty) (WorksheetEditDifficulty, error) {
+	switch d {
+	case DifficultyEnabling:
+		return WorksheetEditDifficultyEnabling, nil
+	case DifficultyMild:
+		return WorksheetEditDifficultyEasy, nil
+	case DifficultyHot:
+		return WorksheetEditDifficultyMedium, nil
+	case DifficultySpicy:
+		return WorksheetEditDifficultyHard, nil
+	case DifficultyExtension:
+		return WorksheetEditDifficultyExt, nil
+	default:
+		return 0, oops.Errorf("unknown lesson plan difficulty %s", d)
+	}
+}
+
+func WorksheetEditDifficultyFromString(s string) (WorksheetEditDifficulty, error) {
+	lpDifficulty := Difficulty(s)
+	if lo.Contains(WorksheetPlanDifficulties, lpDifficulty) {
+		return WorksheetEditDifficultyFromLessonPlanDifficulty(lpDifficulty)
+	}
+
+	qDifficulty := question.QuestionDifficulty(s)
+	if lo.Contains(question.QuestionDifficulties, qDifficulty) {
+		return WorksheetEditDifficultyFromQuestionDifficulty(qDifficulty)
+	}
+
+	return 0, oops.Errorf("invalid worksheet edit difficulty: `%s`", s)
+}
+
+func StringAsLessonPlanDifficulty(s string) (Difficulty, error) {
+	if wsDifficulty, err := WorksheetEditDifficultyFromString(s); err != nil {
+		return "", err
+	} else {
+		return wsDifficulty.ToLessonPlanDifficulty()
+	}
+}
+
+func CompareLessonPlanDifficulties(a, b Difficulty) (int, error) {
+	wsDiffA, err := WorksheetEditDifficultyFromLessonPlanDifficulty(a)
+	if err != nil {
+		return 0, err
+	}
+	wsDiffB, err := WorksheetEditDifficultyFromLessonPlanDifficulty(b)
+	if err != nil {
+		return 0, err
+	}
+	return wsDiffA.Compare(wsDiffB)
+}
+
+func (d WorksheetEditDifficulty) Compare(difficulty WorksheetEditDifficulty) (int, error) {
+	a, b := int(d), int(difficulty)
+	switch {
+	case a < b:
+		return -1, nil
+	case a > b:
+		return 1, nil
+	default:
+		return 0, nil
+	}
+}
+

@@ -1,0 +1,699 @@
+// api/lesson_documentation/configs.go
+package lessondocumentation
+
+import (
+	"reflect"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+var lpnTypeMap = map[reflect.Type]DocumentationNodeType{
+	reflect.TypeOf(&ContentDescriptorsNode{}):         DocumentationNodeTypeContentDescriptors,
+	reflect.TypeOf(&SuccessCriteriaNode{}):            DocumentationNodeTypeSuccessCriteria,
+	reflect.TypeOf(&LearningObjectivesNode{}):         DocumentationNodeTypeLearningObjectives,
+	reflect.TypeOf(&WarmUpQuestionsNode{}):            DocumentationNodeTypeWarmUpQuestions,
+	reflect.TypeOf(&WarmUpQuestionsWithContextNode{}): DocumentationNodeTypeWarmUpQuestionsWithContextNode,
+	reflect.TypeOf(&ThoughtSparkerNode{}):             DocumentationNodeTypeThoughtSparker,
+	reflect.TypeOf(&ApplicationNode{}):                DocumentationNodeTypeApplication,
+	reflect.TypeOf(&BrainTeaserNode{}):                DocumentationNodeTypeBrainTeaser,
+	reflect.TypeOf(&MathsDebateNode{}):                DocumentationNodeTypeMathsDebate,
+	reflect.TypeOf(&ExitTicketNode{}):                 DocumentationNodeTypeExitTicket,
+	reflect.TypeOf(&ContemplativeQuestionNode{}):      DocumentationNodeTypeContemplativeQuestion,
+	reflect.TypeOf(&NoteNode{}):                       DocumentationNodeTypeNote,
+	reflect.TypeOf(&ActivityNode{}):                   DocumentationNodeTypeActivity,
+	reflect.TypeOf(&SituationalQuestionNode{}):        DocumentationNodeTypeSituationalQuestion,
+}
+
+func ldn[N any, PN interface {
+	LessonNode
+	*N
+}](modifiers ...func(PN),
+) PN {
+	node := PN(new(N))
+	base := node.Base()
+	base.SetID(id.MustNew())
+	base.Enabled = false
+	base.Hidden = false
+	base.Ready = false
+	nodeType := reflect.TypeOf(node)
+	base.Type = lpnTypeMap[nodeType]
+	base.Name = node.GetDefaultName()
+	for _, m := range modifiers {
+		m(node)
+	}
+	return node
+}
+
+func GetLessonDocumentationNodes() (_ []LessonNode) {
+	return []LessonNode{
+		ldn[ContentDescriptorsNode](),
+		ldn[SuccessCriteriaNode](),
+		ldn[LearningObjectivesNode](),
+		ldn[WarmUpQuestionsNode](),
+		ldn[ThoughtSparkerNode](),
+		ldn[ApplicationNode](),
+		ldn[BrainTeaserNode](),
+		ldn[MathsDebateNode](),
+		ldn[ActivityNode](),
+		ldn[ExitTicketNode](),
+		ldn[ContemplativeQuestionNode](),
+		ldn[SituationalQuestionNode](),
+		ldn[WarmUpQuestionsWithContextNode](),
+	}
+}
+
+// GetLessonDocumentationNoteNode creates a new node type of Note
+// Used whenever user creates a custom documentation node.
+func GetLessonDocumentationNoteNode() (_ *NoteNode) {
+	node := ldn[NoteNode]()
+	base := node.Base()
+	base.Enabled = true
+	base.Hidden = false
+	base.Ready = true
+	return node
+}
+
+// api/lesson_documentation/edges.go
+package lessondocumentation
+
+import (
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+)
+
+type DocumentationIncludesDocumentationNodeEdge struct {
+	edge.Edge `neo4j:"INCLUDES"`
+	Index     int `json:"index"`
+}
+
+type LessonPlanHasDocumentationDocumentationEdge struct {
+	edge.Edge `neo4j:"HAS_DOCUMENTATION"`
+}
+
+type DocumentationNodeHasDocumentationContentEdge struct {
+	edge.Edge `neo4j:"HAS"`
+	Index     int `json:"index"`
+}
+
+// api/lesson_documentation/entity.go
+package lessondocumentation
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/rlch/neogo"
+)
+
+// TODO(@Zachariah-Abraham): Refactor documentation to have sections with titles, and nodes under sections
+type LessonDocumentation struct {
+	neogo.Node `neo4j:"LessonDocumentation,id:ldoc"`
+	CreatedAt  time.Time `neo4j:"createdAt"`
+
+	Ready                      bool                     `json:"ready"`
+	Title                      *string                  `json:"title" neo4j:"optional"`
+	Header                     *string                  `json:"header" neo4j:"optional"`
+	CurriculumConnectionsTitle *string                  `json:"curriculumConnectionsTitle" neo4j:"optional"`
+	LessonPlanItemsTitle       *string                  `json:"lessonPlanItemsTitle" neo4j:"optional"`
+	LayoutType                 *DocumentationLayoutType `json:"layoutType" neo4j:"optional"`
+}
+
+func (LessonDocumentation) IsEntity() {}
+
+func (LessonDocumentation) GetDefaultCurriculumConnectionsTitle() string {
+	return "Curriculum Connections"
+}
+
+func (LessonDocumentation) GetDefaultLessonPlanItemsTitle() string {
+	return "Lesson Plan Items"
+}
+
+type DocumentationLayoutType string
+
+const (
+	DocumentationLayoutTypeTable DocumentationLayoutType = "TABLE"
+	DocumentationLayoutTypeList  DocumentationLayoutType = "LIST"
+)
+
+type LessonNode interface {
+	neogo.IAbstract
+	Base() *BaseNode
+	IsEntity()
+	IsLessonDocumentationNode()
+	GetID() id.ID
+	GetDefaultName() string
+}
+
+type BaseNode struct {
+	neogo.Abstract `neo4j:"LessonDocumentationNode"`
+	neogo.Node
+	CreatedAt time.Time `json:"createdAt"`
+
+	Type    DocumentationNodeType `json:"type"`
+	Hidden  bool                  `json:"hidden"`
+	Enabled bool                  `json:"enabled"`
+	Ready   bool                  `json:"ready"`
+	Name    string                `json:"name"`
+
+	Index int `json:"-"`
+}
+
+var _ neogo.IAbstract = (*BaseNode)(nil)
+
+func (BaseNode) IsEntity()                  {}
+func (BaseNode) IsLessonDocumentationNode() {}
+
+func (l *BaseNode) Base() *BaseNode {
+	return l
+}
+
+func (l BaseNode) GetID() id.ID {
+	return l.ID
+}
+
+func (l BaseNode) GetDefaultName() string {
+	return l.Name
+}
+
+type DocumentationNodeType string
+
+const (
+	DocumentationNodeTypeContentDescriptors             DocumentationNodeType = "CONTENT_DESCRIPTORS"
+	DocumentationNodeTypeSuccessCriteria                DocumentationNodeType = "SUCCESS_CRITERIA"
+	DocumentationNodeTypeLearningObjectives             DocumentationNodeType = "LEARNING_OBJECTIVES"
+	DocumentationNodeTypeApplication                    DocumentationNodeType = "APPLICATION"
+	DocumentationNodeTypeBrainTeaser                    DocumentationNodeType = "BRAIN_TEASER"
+	DocumentationNodeTypeMathsDebate                    DocumentationNodeType = "MATHS_DEBATE"
+	DocumentationNodeTypeWarmUpQuestions                DocumentationNodeType = "WARM_UP_QUESTIONS"
+	DocumentationNodeTypeWarmUpQuestionsWithContextNode DocumentationNodeType = "WARM_UP_QUESTIONS_WITH_CONTEXT"
+	DocumentationNodeTypeThoughtSparker                 DocumentationNodeType = "THOUGHT_SPARKER"
+	DocumentationNodeTypeExitTicket                     DocumentationNodeType = "EXIT_TICKET"
+	DocumentationNodeTypeContemplativeQuestion          DocumentationNodeType = "CONTEMPLATIVE_QUESTION"
+	DocumentationNodeTypeNote                           DocumentationNodeType = "NOTE"
+	DocumentationNodeTypeActivity                       DocumentationNodeType = "ACTIVITY"
+	DocumentationNodeTypeSituationalQuestion            DocumentationNodeType = "SITUATIONAL_QUESTION"
+	DocumentationNodeTypeMultipleChoice                 DocumentationNodeType = "MULTIPLE_CHOICE"
+	DocumentationNodeTypeShortAnswer                    DocumentationNodeType = "SHORT_ANSWER"
+	DocumentationNodeTypeMisconceptionQuestion          DocumentationNodeType = "MISCONCEPTION_QUESTION"
+)
+
+var CurriculumNodeTypes = []DocumentationNodeType{
+	DocumentationNodeTypeSuccessCriteria,
+	DocumentationNodeTypeLearningObjectives,
+	DocumentationNodeTypeContentDescriptors,
+}
+
+func (BaseNode) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&WarmUpQuestionsNode{},
+		&WarmUpQuestionsWithContextNode{},
+		&ThoughtSparkerNode{},
+		&ApplicationNode{},
+		&BrainTeaserNode{},
+		&MathsDebateNode{},
+		&ExitTicketNode{},
+		&ContemplativeQuestionNode{},
+		&ContentDescriptorsNode{},
+		&SuccessCriteriaNode{},
+		&LearningObjectivesNode{},
+		&NoteNode{},
+		&ActivityNode{},
+		&SituationalQuestionNode{},
+		&MultipleChoiceQuestionNode{},
+		&ShortAnswerQuestionNode{},
+		&MisconceptionQuestionNode{},
+	}
+}
+
+type WarmUpQuestionsNode struct {
+	BaseNode `neo4j:"DocumentationWarmUpQuestions"`
+}
+
+func (WarmUpQuestionsNode) GetDefaultName() string {
+	return "Warm Up Questions"
+}
+
+type ThoughtSparkerNode struct {
+	BaseNode `neo4j:"DocumentationThoughtSparker"`
+}
+
+func (ThoughtSparkerNode) GetDefaultName() string {
+	return "Thought Sparker"
+}
+
+type ApplicationNode struct {
+	BaseNode `neo4j:"DocumentationApplication"`
+}
+
+func (ApplicationNode) GetDefaultName() string {
+	return "Real World Application"
+}
+
+type BrainTeaserNode struct {
+	BaseNode `neo4j:"DocumentationBrainTeaser"`
+}
+
+func (BrainTeaserNode) GetDefaultName() string {
+	return "Brain Teaser"
+}
+
+type MathsDebateNode struct {
+	BaseNode `neo4j:"DocumentationMathsDebate"`
+}
+
+func (MathsDebateNode) GetDefaultName() string {
+	return "Maths Debate"
+}
+
+type ExitTicketNode struct {
+	BaseNode `neo4j:"DocumentationExitTicket"`
+}
+
+func (ExitTicketNode) GetDefaultName() string {
+	return "Exit Ticket"
+}
+
+type ContemplativeQuestionNode struct {
+	BaseNode `neo4j:"DocumentationContemplativeQuestion"`
+}
+
+func (ContemplativeQuestionNode) GetDefaultName() string {
+	return "Contemplative Question"
+}
+
+type ContentDescriptorsNode struct {
+	BaseNode `neo4j:"DocumentationContentDescriptors"`
+}
+
+func (ContentDescriptorsNode) GetDefaultName() string {
+	return "Content Descriptors"
+}
+
+type SuccessCriteriaNode struct {
+	BaseNode `neo4j:"DocumentationSuccessCriteria"`
+}
+
+func (SuccessCriteriaNode) GetDefaultName() string {
+	return "Success Criteria"
+}
+
+type LearningObjectivesNode struct {
+	BaseNode `neo4j:"DocumentationLearningObjectives"`
+}
+
+func (LearningObjectivesNode) GetDefaultName() string {
+	return "Learning Objectives"
+}
+
+type NoteNode struct {
+	BaseNode `neo4j:"DocumentationNote"`
+}
+
+func (NoteNode) GetDefaultName() string {
+	return ""
+}
+
+type ActivityNode struct {
+	BaseNode `neo4j:"DocumentationActivity"`
+}
+
+func (ActivityNode) GetDefaultName() string {
+	return "Activity"
+}
+
+type SituationalQuestionNode struct {
+	BaseNode `neo4j:"DocumentationSituationalQuestion"`
+}
+
+func (SituationalQuestionNode) GetDefaultName() string {
+	return "Situational Question"
+}
+
+type WarmUpQuestionsWithContextNode struct {
+	BaseNode `neo4j:"DocumentationWarmUpQuestionsWithContextNode"`
+}
+
+func (WarmUpQuestionsWithContextNode) GetDefaultName() string {
+	return "WarmUpQuestions"
+}
+
+type ScaffoldedQuestionNode struct {
+	BaseNode `neo4j:"DocumentationScaffoldedQuestion"`
+}
+
+func (ScaffoldedQuestionNode) GetDefaultName() string {
+	return "Scaffolded Question"
+}
+
+type MultipleChoiceQuestionNode struct {
+	BaseNode `neo4j:"DocumentationMultipleChoiceQuestion"`
+}
+
+func (MultipleChoiceQuestionNode) GetDefaultName() string {
+	return "Multiple Choice Question"
+}
+
+type ShortAnswerQuestionNode struct {
+	BaseNode `neo4j:"DocumentationShortAnswerQuestion"`
+}
+
+func (ShortAnswerQuestionNode) GetDefaultName() string {
+	return "Short Answer Question"
+}
+
+type MisconceptionQuestionNode struct {
+	BaseNode `neo4j:"DocumentationMisconceptionQuestion"`
+}
+
+func (MisconceptionQuestionNode) GetDefaultName() string {
+	return "Misconception Question"
+}
+
+type DocumentationContent struct {
+	neogo.Node `neo4j:"DocumentationContent"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	Code    string `json:"code"`
+	Link    string `json:"link"`
+	Title   string `json:"title"`
+	Content string `json:"content"`
+}
+
+type LessonDocumentationEditConfig struct {
+	neogo.Node   `neo4j:"LessonDocumentationEditConfig"`
+	ReadingLevel LessonDocumentationEditLevel `json:"readingLevel"`
+	Length       LessonDocumentationEditLevel `json:"length"`
+}
+
+// api/lesson_documentation/node_repository.go
+package lessondocumentation
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+// TODO: There should only be one node repository, so move all documentation related implementations to
+// existing node repositories
+type DocumentationNodeRepository interface {
+	Get(ctx context.Context, id id.ID) (node LessonNode, err error)
+	GetDocumentationContent(ctx context.Context, nodeID id.ID) ([]*DocumentationContent, error)
+	GetDocumentationEditConfig(ctx context.Context, nodeID id.ID) (*LessonDocumentationEditConfig, error)
+
+	SetEnabledForLessonPlanNode(ctx context.Context, lessonPlanNodeIDs ...id.ID) error
+	SyncHiddenNodes(ctx context.Context, lessonPlanID id.ID, hiddenLpNodes []id.ID) error
+	SyncCurriculumNodes(ctx context.Context, lessonPlanID id.ID) error
+	Delete(ctx context.Context, lessonPlanID, nodeID id.ID) (id.ID, error)
+
+	Edit(ctx context.Context, lessonDocumentationID id.ID, nodes []DocumentationNodeType, input LessonDocumentationEditSliderInput) (*LessonDocumentation, error)
+	EditNodes(ctx context.Context, lessonPlanID id.ID, inputNodes []*EditDocumentationNodesInput) ([]LessonNode, error)
+	DeleteNodes(ctx context.Context, lessonPlanID id.ID, nodeIDs []id.ID) ([]id.ID, error)
+}
+
+type ReconcilerFunc func() error
+
+type LessonDocumentationReconciler[N any, PN interface {
+	LessonNode
+	*N
+}] interface {
+	// Generates the content from gpt based created leson plan
+	ReconcileUpdatedLessonPlan(ctx context.Context, lessonID id.ID, nodeType DocumentationNodeType) error
+
+	// Regenerates the content from gpt based on selected regeneration option
+	ReconcileRegeneration(ctx context.Context, input ReconcileEditInput) error
+}
+type ReconcileEditInput struct {
+	LessonDocumentationID id.ID
+	NodeType              DocumentationNodeType
+	EditTemplate          string
+	EditValues            map[string]string
+}
+
+type LessonNodeGetter[N any, PN interface {
+	*N
+	LessonNode
+}] interface {
+	Get(ctx context.Context, id id.ID) (PN, error)
+}
+
+type WarmUpQuestionsNodeRepository interface {
+	LessonNodeGetter[WarmUpQuestionsNode, *WarmUpQuestionsNode]
+}
+
+type ThoughtSparkerNodeRepository interface {
+	LessonNodeGetter[ThoughtSparkerNode, *ThoughtSparkerNode]
+}
+
+type ApplicationNodeRepository interface {
+	LessonNodeGetter[ApplicationNode, *ApplicationNode]
+}
+
+type BrainTeaserNodeRepository interface {
+	LessonNodeGetter[BrainTeaserNode, *BrainTeaserNode]
+}
+
+type MathsDebateNodeRepository interface {
+	LessonNodeGetter[MathsDebateNode, *MathsDebateNode]
+}
+
+type ExitTicketNodeRepository interface {
+	LessonNodeGetter[ExitTicketNode, *ExitTicketNode]
+}
+
+type ContemplativeQuestionNodeRepository interface {
+	LessonNodeGetter[ContemplativeQuestionNode, *ContemplativeQuestionNode]
+}
+
+type MultipleChoiceQuestionNodeRepository interface {
+	LessonNodeGetter[MultipleChoiceQuestionNode, *MultipleChoiceQuestionNode]
+}
+
+type ShortAnswerQuestionNodeRepository interface {
+	LessonNodeGetter[ShortAnswerQuestionNode, *ShortAnswerQuestionNode]
+}
+
+type MisconceptionQuestionNodeRepository interface {
+	LessonNodeGetter[MisconceptionQuestionNode, *MisconceptionQuestionNode]
+}
+
+type WarmUpQuestionsWithContextNodeRepository interface {
+	LessonNodeGetter[WarmUpQuestionsWithContextNode, *WarmUpQuestionsWithContextNode]
+}
+
+type ContentDescriptorsNodeRepository interface {
+	LessonNodeGetter[ContentDescriptorsNode, *ContentDescriptorsNode]
+}
+
+type SuccessCriteriaNodeRepository interface {
+	LessonNodeGetter[SuccessCriteriaNode, *SuccessCriteriaNode]
+}
+
+type LearningObjectivesNodeRepository interface {
+	LessonNodeGetter[LearningObjectivesNode, *LearningObjectivesNode]
+}
+
+type NoteNodeRepository interface {
+	LessonNodeGetter[NoteNode, *NoteNode]
+	Create(ctx context.Context, lessonPlanID, lessonDocumentationID id.ID, input CreateDocumentationNoteNodeInput) (*NoteNode, error)
+	Delete(ctx context.Context, lessonPlanID, lessonDocumentationNoteNodeID id.ID) (id.ID, error)
+	CreateNotes(ctx context.Context, lessonPlanID, lessonDocumentationID id.ID, inputNodes []*CreateDocumentationNoteNodeInput) ([]*NoteNode, error)
+}
+
+type ActivityNodeRepository interface {
+	LessonNodeGetter[ActivityNode, *ActivityNode]
+}
+
+type SituationalQuestionNodeRepository interface {
+	LessonNodeGetter[SituationalQuestionNode, *SituationalQuestionNode]
+}
+
+type ScaffoldedQuestionNodeRepository interface {
+	LessonNodeGetter[ScaffoldedQuestionNode, *ScaffoldedQuestionNode]
+}
+
+type CreateDocumentationNoteNodeInput struct {
+	Name          string                      `json:"name"`
+	Documentation []DocumentationContentInput `json:"documentation"`
+}
+
+type EditDocumentationNodesInput struct {
+	NodeID id.ID                       `json:"nodeID"`
+	Name   string                      `json:"name"`
+	Inputs []DocumentationContentInput `json:"inputs"`
+}
+
+type EditDocumentationNodeInput struct {
+	Name          string                      `json:"name"`
+	Documentation []DocumentationContentInput `json:"documentation"`
+}
+
+// api/lesson_documentation/prompts.go
+package lessondocumentation
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type LessonDocumentationPromptNode[
+	N any, PN interface {
+		*N
+		LessonNode
+	},
+] interface {
+	HasPrompt() bool
+	GetLessonPlanUpdatedPromptConfigurations(ctx context.Context, node PN) ([]*PromptConfiguration[N, PN], error)
+	GetRegeneratePromptConfigurations(ctx context.Context, node PN, template string, editValues map[string]string) ([]*PromptConfiguration[N, PN], error)
+}
+
+type LessonDocumentationTemplateValues struct {
+	LessonID id.ID
+}
+
+type LessonDocumentationPromptOutput[N any, PN interface {
+	*N
+	LessonNode
+}] interface {
+	UnmarshalOutput([]byte) error
+
+	// Generates the content from gpt based created leson plan
+	ReconcileUpdatedLessonPlan(
+		ctx context.Context,
+		lessonID id.ID,
+		node PN,
+	) error
+
+	// Editing with ai
+	ReconcileRegeneratedDocumentation(
+		ctx context.Context,
+		lessonID id.ID,
+		node PN,
+	) error
+}
+
+type PromptConfiguration[N any, PN interface {
+	*N
+	LessonNode
+}] struct {
+	BuildPromptValues func(baseInput LessonDocumentationTemplateValues) (any, error)
+	NewOutput         func() LessonDocumentationPromptOutput[N, PN]
+	PromptTemplate    string
+	MaxTokens         int
+	Temperature       float32
+}
+
+// api/lesson_documentation/regenerate_node.go
+package lessondocumentation
+
+type RegenerativeLessonDocumentationNode interface {
+	IsRegenerativeLessonDocumentationNode()
+}
+
+type RegenerateDocumentationOption string
+
+const (
+	RegenerateOptionMakeLonger  RegenerateDocumentationOption = "MAKE_LONGER"
+	RegenerateOptionMakeShorter RegenerateDocumentationOption = "MAKE_SHORTER"
+	RegenerateOptionSimplify    RegenerateDocumentationOption = "SIMPLIFY"
+)
+
+type EditableLessonDocumentationNode interface {
+	IsEditableLessonDocumentationNode()
+}
+
+type LessonDocumentationEditLevel string
+
+const (
+	DocumentationEditLevelLevelOne   LessonDocumentationEditLevel = "LEVEL_ONE"
+	DocumentationEditLevelLevelTwo   LessonDocumentationEditLevel = "LEVEL_TWO"
+	DocumentationEditLevelLevelThree LessonDocumentationEditLevel = "LEVEL_THREE"
+	DocumentationEditLevelLevelFour  LessonDocumentationEditLevel = "LEVEL_FOUR"
+	DocumentationEditLevelLevelFive  LessonDocumentationEditLevel = "LEVEL_FIVE"
+)
+
+var (
+	DocumentationEditLevels = []LessonDocumentationEditLevel{
+		DocumentationEditLevelLevelOne,
+		DocumentationEditLevelLevelTwo,
+		DocumentationEditLevelLevelThree,
+		DocumentationEditLevelLevelFour,
+		DocumentationEditLevelLevelFive,
+	}
+	// grade level equivalency
+	DocumentationEditLevelToGradeLevel = map[LessonDocumentationEditLevel]string{
+		DocumentationEditLevelLevelOne:   "2",
+		DocumentationEditLevelLevelTwo:   "4",
+		DocumentationEditLevelLevelThree: "6",
+		DocumentationEditLevelLevelFour:  "8",
+		DocumentationEditLevelLevelFive:  "10",
+	}
+	// word count equivalency
+	DocumentationEditLevelToWordCount = map[LessonDocumentationEditLevel]string{
+		DocumentationEditLevelLevelOne:   "15",
+		DocumentationEditLevelLevelTwo:   "25",
+		DocumentationEditLevelLevelThree: "35",
+		DocumentationEditLevelLevelFour:  "45",
+		DocumentationEditLevelLevelFive:  "55",
+	}
+)
+
+// api/lesson_documentation/repository.go
+package lessondocumentation
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	lessonplan "github.com/MathGaps/resources/api/lesson_plan"
+)
+
+type Repository interface {
+	Get(ctx context.Context, id id.ID) (*LessonDocumentation, error)
+	GetLessonDocumentation(ctx context.Context, lessonID id.ID) (*LessonDocumentation, error)
+	GetEnabledNodeTypesForLessonPlan(ctx context.Context, lessonPlanID id.ID) ([]DocumentationNodeType, error)
+	Create(ctx context.Context, input LessonDocumentationCreationInput) (_ []*LessonDocumentation, err error)
+	Update(ctx context.Context, lessonDocumentationID id.ID, input UpdateLessonDocumentationInput) (*LessonDocumentation, error)
+	EnableNodeTypes(ctx context.Context, lessonDocumentationID id.ID, nodes []DocumentationNodeType) (*LessonDocumentation, error)
+
+	ReconcileDocumentationForLessonPlanNodes(ctx context.Context, lessonID id.ID, nodes []lessonplan.LessonPlanNode) error
+	ReconcileDocumentationForLesson(ctx context.Context, lessonPlanID, lessonID id.ID, enabledNodes []DocumentationNodeType) error
+	DeleteDocumentation(ctx context.Context, lessonPlanID id.ID) error
+	UpdateLessonDocumentationStatus(ctx context.Context, lessonID id.ID) (err error)
+
+	GetNodes(ctx context.Context, id id.ID) (out []LessonNode, err error)
+	GetNodeByIndex(ctx context.Context, id id.ID, index int) (LessonNode, error)
+	TotalNodesCount(ctx context.Context, id id.ID) (int, error)
+	ReorderNodes(ctx context.Context, id id.ID, nodeIDs []id.ID) (*LessonDocumentation, error)
+	Regenerate(ctx context.Context, lessonDocumentationID id.ID, option RegenerateDocumentationOption, nodes []DocumentationNodeType) (*LessonDocumentation, error)
+	RegenerateDocumentation(ctx context.Context, lessonPlanID, lessonDocumentationID id.ID) (*LessonDocumentation, error)
+}
+
+type DocumentationContentInput struct {
+	Title   string `json:"title"`
+	Content string `json:"content"`
+}
+
+type UpdateLessonDocumentationInput struct {
+	Title                      *string                  `json:"title,omitempty"`
+	Header                     *string                  `json:"header,omitempty"`
+	CurriculumConnectionsTitle *string                  `json:"curriculumConnectionsTitle,omitempty"`
+	LessonPlanItemsTitle       *string                  `json:"lessonPlanItemsTitle,omitempty"`
+	LayoutType                 *DocumentationLayoutType `json:"layoutType,omitempty"`
+}
+
+type LessonDocumentationCreationInput struct {
+	LessonPlanID id.ID
+	LayoutType   DocumentationLayoutType
+	// Node types to enable, when empty enables all available nodes
+	EnabledNodes []DocumentationNodeType
+	// if false, creates documentation only for lessons without one.
+	// if true, deletes and recreates documentation for all lessons.
+	Regenerate bool
+}
+
+type LessonDocumentationEditSliderInput struct {
+	ReadingLevel *LessonDocumentationEditLevel `json:"readingLevel,omitempty"`
+	Length       *LessonDocumentationEditLevel `json:"length,omitempty"`
+}
+

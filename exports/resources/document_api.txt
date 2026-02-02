@@ -1,0 +1,90 @@
+// api/document/edges.go
+package document
+
+import "github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+
+type UserCreatedDocumentEdge struct {
+	edge.Edge `neo4j:"CREATED"`
+}
+
+// api/document/entity.go
+package document
+
+import (
+	"github.com/MathGaps/resources/api/resource"
+)
+
+type (
+	Document                     = resource.Document
+	CreateDocumentInput          = resource.CreateDocumentInput
+	UpdateDocumentInput          = resource.UpdateDocumentInput
+	GenerateUnitPlanInput        = resource.GenerateUnitPlanInput
+	GenerateDocumentContentInput = resource.GenerateDocumentContentInput
+	DocumentType                 = resource.DocumentType
+	EditDocumentInput            = resource.EditDocumentInput
+	ChangeSkillsInput            = resource.ChangeSkillsInput
+	AdjustCountInput             = resource.AdjustCountInput
+	SliderAdjustmentInput        = resource.SliderAdjustmentInput
+	DocumentContentChunk         = resource.DocumentContentChunk
+	EditSpecificTextInput        = resource.EditSpecificTextInput
+	EditSpecificTextOutput       = resource.EditSpecificTextOutput
+)
+
+const (
+	DocumentTypeUnitPlan               = resource.DocumentTypeUnitPlan
+	DocumentTypeActivityIdeas          = resource.DocumentTypeActivityIdeas
+	DocumentTypeCustomDocument         = resource.DocumentTypeCustomDocument
+	DocumentTypeIndividualLearningPlan = resource.DocumentTypeIndividualLearningPlan
+	DocumentTypeVocabularyList         = resource.DocumentTypeVocabularyList
+	DocumentTypeReflectionQuestions    = resource.DocumentTypeReflectionQuestions
+)
+
+// api/document/prompts.go
+package document
+
+import (
+	"github.com/MathGaps/ai-tooling/api/llm"
+)
+
+// UnitPlanPromptConfiguration contains the configuration for unit plan LLM completion
+type UnitPlanPromptConfiguration struct {
+	SystemTemplate      string
+	UserTemplate        string
+	Provider            llm.ProviderType
+	Model               string
+	MaxCompletionTokens int32
+	Temperature         float32
+	ReasoningEffort     string
+}
+
+// api/document/repository.go
+package document
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/common"
+	"github.com/MathGaps/resources/api/skill"
+)
+
+type Repository interface {
+	Get(ctx context.Context, documentID id.ID) (*Document, error)
+	CreateForIndividual(ctx context.Context, input CreateDocumentInput) (*Document, error)
+	CreateForClass(ctx context.Context, classID id.ID, input CreateDocumentInput) (*Document, error)
+	Update(ctx context.Context, documentID id.ID, input UpdateDocumentInput) (*Document, error)
+	DeleteDocument(ctx context.Context, documentID id.ID) (bool, error)
+	GenerateUnitPlanContent(ctx context.Context, input GenerateUnitPlanInput) (<-chan *DocumentContentChunk, error)
+	GenerateDocumentContent(ctx context.Context, input GenerateDocumentContentInput) (<-chan *DocumentContentChunk, error)
+	EditDocument(ctx context.Context, input EditDocumentInput) (<-chan *DocumentContentChunk, error)
+	ChangeSkills(ctx context.Context, input ChangeSkillsInput) (<-chan *DocumentContentChunk, error)
+	AdjustDocumentCount(ctx context.Context, input AdjustCountInput) (<-chan *DocumentContentChunk, error)
+	SliderAdjustment(ctx context.Context, input SliderAdjustmentInput) (<-chan *DocumentContentChunk, error)
+	EditSpecificText(ctx context.Context, input EditSpecificTextInput) (*EditSpecificTextOutput, error)
+	GetDirectSkills(ctx context.Context, documentID id.ID) ([]*skill.Skill, error)
+	SearchSkills(ctx context.Context, documentID id.ID, query string, options common.OffsetPaginationOptions, scoreThreshold float64) ([]*skill.Skill, error)
+	UpdateCoverImage(ctx context.Context, documentID id.ID, imageUrl string) (*Document, error)
+	TransferDocumentToClass(ctx context.Context, teacherID, classID id.ID) error
+	DuplicateDocumentToClass(ctx context.Context, documentID id.ID, classID id.ID, folderID id.ID) (*Document, error)
+}
+

@@ -1,0 +1,2496 @@
+// api/content/analytics/repository.go
+package analytics
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/types"
+)
+
+type Repository interface {
+	GetQuestionFeedAnalytics(ctx context.Context, filter QuestionFeedSkillFilter, entityType QuestionFeedType) (*QuestionFeedStateCount, error)
+	GetQuestionStats(ctx context.Context) (*QuestionStats, error)
+	GetQuestionLeaderboard(ctx context.Context, action Action, period *types.TimeRange) ([]*UserActionCount, error)
+	GetQuestionProgress(ctx context.Context, questionsPerSkill bool, intervals int, period *types.TimeRange) ([]*QuestionProgress, error)
+}
+
+type QuestionFeedSkillFilter string
+
+const (
+	QuestionFeedSkillFilterAllSkills     QuestionFeedSkillFilter = "ALL_SKILLS"
+	QuestionFeedSkillFilterShownInApp    QuestionFeedSkillFilter = "SHOWN_IN_APP"
+	QuestionFeedSkillFilterNotShownInApp QuestionFeedSkillFilter = "NOT_SHOWN_IN_APP"
+)
+
+type QuestionFeedType string
+
+const (
+	QuestionFeedTypeSkills         QuestionFeedType = "SKILLS"
+	QuestionFeedTypeQuestions      QuestionFeedType = "QUESTIONS"
+	QuestionFeedTypeQuestionGroups QuestionFeedType = "QUESTION_GROUPS"
+)
+
+type Action string
+
+const (
+	ActionQuestionWritten   Action = "WRITTEN"
+	ActionQuestionConfirmed Action = "CONFIRMED"
+	ActionQuestionFixed     Action = "FIXED"
+	ActionQuestionChecked   Action = "CHECKED"
+	ActionPointsTally       Action = "POINTS_TALLY"
+)
+
+type QuestionFeedStateCount struct {
+	RequiresChecking int `json:"requiresChecking"`
+	ImagesRequested  int `json:"imagesRequested"`
+	UpForReview      int `json:"upForReview"`
+	NegativeChecking int `json:"negativeChecking"`
+	Requests         int `json:"requests"`
+	NegativeComments int `json:"negativeComments"`
+	NeedsRefactoring int `json:"needsRefactoring"`
+	UnseenComments   int `json:"unseenComments"`
+	NoQuestions      int `json:"noQuestions"`
+	Checked          int `json:"checked"`
+}
+
+type QuestionStats struct {
+	Written   int `json:"written"`
+	Confirmed int `json:"confirmed"`
+}
+
+type UserActionCount struct {
+	UserID id.ID  `json:"userID"`
+	Action Action `json:"action"`
+	Count  int    `json:"count"`
+}
+
+type QuestionProgress struct {
+	Date         string  `json:"date"`
+	ActiveCount  float64 `json:"activeCount"`
+	WrittenCount float64 `json:"writtenCount"`
+}
+
+// api/content/common.go
+package content
+
+import (
+	"encoding/json"
+	"io"
+
+	"github.com/samber/oops"
+)
+
+type IconMapType map[string]any
+
+func (i IconMapType) MarshalJSON() ([]byte, error) {
+	b, err := json.Marshal(map[string]any(i))
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(string(b))
+}
+
+func (i *IconMapType) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		// If it isn't a JSON string literal, assume it's already unquoted.
+		var m map[string]any
+		if err2 := json.Unmarshal(b, &m); err2 != nil {
+			return oops.Wrapf(err2, "IconMapType: cannot unmarshal data")
+		}
+		*i = IconMapType(m)
+		return nil
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return oops.Wrapf(err, "IconMapType: cannot unmarshal inner string content")
+	}
+
+	*i = IconMapType(m)
+	return nil
+}
+
+func (i *IconMapType) UnmarshalGQL(v interface{}) error {
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		return oops.New("GraphQL type assertion failed")
+	}
+	*i = IconMapType(m)
+	return nil
+}
+
+func (i IconMapType) MarshalGQL(w io.Writer) {
+	b, err := json.Marshal(map[string]any(i))
+	if err != nil {
+		panic("cannot marshal IconMapType: " + err.Error())
+	}
+	_, err = w.Write(b)
+	if err != nil {
+		panic("cannot write marshalled IconMapType: " + err.Error())
+	}
+}
+
+// api/content/course/entity.go
+package course
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/pagination"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+)
+
+type Course struct {
+	node.Node `neo4j:"Course,id:course"`
+	Title     string `json:"title"`
+}
+
+type ParentCourseInput struct {
+	Parent   id.ID
+	Child    id.ID
+	RegionID id.ID
+}
+
+type CourseNetworkOptions struct {
+	*pagination.GetAllOptions
+	*CourseNetworkFilter
+}
+
+type CourseNetworkFilter struct {
+	Subjects []id.ID `json:"subjects"`
+	Years    []id.ID `json:"years"`
+}
+
+// api/content/course/repository.go
+package course
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+	"github.com/MathGaps/learning/v2/api/content/network"
+	"github.com/MathGaps/learning/v2/api/content/stream"
+	"github.com/MathGaps/learning/v2/api/content/year"
+)
+
+type CourseInYearInput struct {
+	YearID   id.ID `json:"yearID"`
+	RegionID id.ID `json:"regionID"`
+}
+
+type Repository interface {
+	repository.CRUDRepository[Course]
+	AddNetworkEdge(ctx context.Context, parentNetworkEdge edges.ParentNetworkEdge) (*edges.ParentNetworkEdge, error)
+	RemoveNetworkEdge(ctx context.Context, from, to, courseID id.ID) error
+	LinkNetwork(ctx context.Context, courseContainsNetworkEdge edges.CourseContainsNetworkEdge) (*edges.CourseContainsNetworkEdge, error)
+	// This also removes all edges defined under the context of this Course.
+	UnlinkNetwork(ctx context.Context, courseID, networkID id.ID) error
+	LinkNetworkToStream(ctx context.Context, streamContainsNetworkEdge edges.StreamContainsNetworkEdge) (*edges.StreamContainsNetworkEdge, error)
+	LinkYearToNetwork(ctx context.Context, networkStudiedInYearEdge edges.NetworkStudiedInYearEdge) (*edges.NetworkStudiedInYearEdge, error)
+	GetNetworks(ctx context.Context, courseID id.ID, options *CourseNetworkOptions) ([]*network.Network, error)
+	GetNetworkCount(ctx context.Context, courseID id.ID) (int, error)
+	CoursesLinkedToNetwork(ctx context.Context, networkID id.ID) ([]*Course, error)
+	AddParentCourse(ctx context.Context, input ParentCourseInput) (*edges.ParentCourseEdge, error)
+	RemoveParentCourse(ctx context.Context, input ParentCourseInput) (*edges.ParentCourseEdge, error)
+	RemoveLinkedCourse(ctx context.Context, courseID, regionID id.ID) (bool, error)
+	GetParentCourses(ctx context.Context, courseID, regionID id.ID) ([]*Course, error)
+	GetChildCourses(ctx context.Context, courseID, regionID id.ID) ([]*Course, error)
+	GetCoursesInRegion(ctx context.Context, regionID id.ID, yearID *id.ID) ([]*Course, error)
+	GetYearLinkedToNetwork(ctx context.Context, networkID, courseID id.ID) (*year.Year, error)
+	GetStreamLinkedToNetwork(ctx context.Context, networkID, courseID id.ID) (*stream.Stream, error)
+	GetCoursesInYear(ctx context.Context, input *CourseInYearInput) ([]*Course, error)
+}
+
+// api/content/curriculum/entity.go
+package curriculum
+
+import "github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+
+type Curriculum struct {
+	node.Node  `neo4j:"Curriculum,id:curriculum"`
+	Version    string  `json:"version"`
+	Name       string  `json:"name"`
+	Icon       string  `json:"icon"`
+	Color      string  `json:"color"`
+	Nickname   string  `json:"nickname"`
+	StrandsCSV *string `json:"strandsCSV"`
+	// AllowCSVImport is a flag that indicates if the curriculum allows CSV import.
+	AllowCSVImport bool `json:"allowCSVImport"`
+	Class          bool `json:"class"`
+	Index          int  `json:"index" neo4j:"optional"`
+}
+
+type Substrand struct {
+	node.Node          `neo4j:"Substrand,id:substrand"`
+	CurriculumCode     string `json:"curriculumCode"`
+	ContentDescription string `json:"contentDescription"`
+	ReferenceURL       string `json:"referenceURL"`
+}
+
+type Elaboration struct {
+	node.Node `neo4j:"Elaboration,id:elaboration"`
+	Title     string `json:"title"`
+	YearID    string `json:"yearID"`
+}
+
+type CurriculumSearchOptions struct {
+	CurriculumID string `json:"curriculumID"`
+}
+
+type SubstrandSearchOptions struct {
+	SubstrandID string `json:"substrandID"`
+}
+
+type UpdateCurriculumInput struct {
+	Version        *string `json:"version,omitempty"`
+	Icon           *string `json:"icon,omitempty"`
+	Name           *string `json:"name,omitempty"`
+	Color          *string `json:"color,omitempty"`
+	Nickname       *string `json:"nickname,omitempty"`
+	AllowCSVImport *bool   `json:"allowCSVImport,omitempty"`
+}
+
+// api/content/curriculum/repository.go
+package curriculum
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+)
+
+type TitleCSVMap = map[string]string
+
+type Repository interface {
+	repository.CRUDRepository[Curriculum]
+	CreateCurriculum(ctx context.Context, input func(*Curriculum)) (*Curriculum, error)
+	UpdateCurriculum(ctx context.Context, curriculumID id.ID, input UpdateCurriculumInput) (*Curriculum, error)
+	ClearCurriculumData(ctx context.Context, curriculumID id.ID, deleteCurriculum bool) (bool, error)
+	ImportStrands(ctx context.Context, curriculumID id.ID, csvURL string) error
+	EvictCurriculumCache(ctx context.Context) (err error)
+	ImportSubstrands(ctx context.Context, curriculumID, subjectID id.ID, csvURL string) error
+	ImportElaborations(ctx context.Context, curriculumID id.ID, csvURL string) error
+	CurriculumsLinkedToNetwork(ctx context.Context, networkID id.ID) ([]*Curriculum, error)
+	RealisedSubstrands(ctx context.Context, strandID, networkID id.ID) ([]*Substrand, error)
+	TaughtElaborations(ctx context.Context, substrandID id.ID) ([]*Elaboration, error)
+	GetSubstrand(ctx context.Context, id id.ID) (*Substrand, error)
+	GetElaboration(ctx context.Context, id id.ID) (*Elaboration, error)
+	GetSubstrandCSVs(ctx context.Context, curriculumID id.ID) (TitleCSVMap, error)
+	GetElaborationCSVs(ctx context.Context, curriculumID id.ID) (TitleCSVMap, error)
+	SubstrandsMappedToSubtopic(ctx context.Context, subtopicID, networkID, curriculumID id.ID) ([]*Substrand, error)
+	ReorderSubtopicsInStrand(ctx context.Context, strandID, networkID id.ID, subtopicOrder []id.ID) (bool, error)
+}
+
+const CurriculumCacheKeyPrefix = "user-curriculum"
+
+// api/content/edges/edges.go
+package edges
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+)
+
+type CommentState string
+
+const (
+	Unseen     CommentState = "UNSEEN"
+	Resolved   CommentState = "RESOLVED"
+	Unresolved CommentState = "UNRESOLVED"
+)
+
+// SubjectProvidesNetworkGroupEdge defines network groups that are provided by the subject
+type SubjectProvidesNetworkGroupEdge struct {
+	edge.Edge `neo4j:"PROVIDES"`
+}
+
+// NetworkGroupInGroupNetworkEdge is a relationship type between a group and a network inside that group.
+type NetworkGroupInGroupNetworkEdge struct {
+	edge.Edge `neo4j:"IN_GROUP"`
+}
+
+// TopicBaseSubtopicEdge is an edge type from a Topic to a Subtopic.
+// They define all the possible Subtopics that can be studied in this Topic, irrespective of what
+// network the Topic is realised under.
+type TopicBaseSubtopicEdge struct {
+	edge.Edge `neo4j:"BASE"`
+	// The order of the subtopic in the topic.
+	Order int `json:"order"`
+}
+type CourseContainsStreamEdge struct {
+	edge.Edge `neo4j:"CONTAINS"`
+}
+
+type StreamContainsNetworkEdge struct {
+	edge.Edge `neo4j:"CONTAINS"`
+	CourseID  id.ID `json:"courseID"`
+}
+
+type NetworkStudiedInYearEdge struct {
+	edge.Edge `neo4j:"STUDIED_IN"`
+	CourseID  id.ID `json:"courseID"`
+}
+
+type CourseContainsNetworkEdge struct {
+	edge.Edge `neo4j:"CONTAINS"`
+}
+
+// RegionOverridesYearEdge defines field overrides for a Year, by the parent Region.
+// i.e. A specific Region can override the title of a Year.
+type RegionOverridesYearEdge struct {
+	edge.Edge `neo4j:"OVERRIDES"`
+	Title     string `json:"title"`
+}
+
+type ParentCourseEdge struct {
+	edge.Edge `neo4j:"PARENT"`
+	RegionID  id.ID `json:"regionID"`
+}
+
+type AnswerDiagnosesSkillEdge struct {
+	edge.Edge `neo4j:"DIAGNOSES"`
+	Score     int `json:"score"`
+}
+
+type QuestionGroupCoversSkillEdge struct {
+	edge.Edge `neo4j:"COVERS"`
+	Order     int `json:"order"`
+}
+
+type QuestionGroupContainsQuestionEdge struct {
+	edge.Edge `neo4j:"CONTAINS"`
+	Order     int `json:"order"`
+}
+
+type QuestionGroupChallengesSkillEdge struct {
+	edge.Edge `neo4j:"CHALLENGES"`
+}
+
+type QuestionHasAnswerEdge struct {
+	edge.Edge `neo4j:"HAS_ANSWER"`
+}
+
+type QuestionRequestsImageEdge struct {
+	edge.Edge `neo4j:"REQUESTS"`
+}
+
+type UserConfirmsSkillEdge struct {
+	edge.Edge          `neo4j:"CONFIRMS"`
+	Title              int `json:"title"`
+	Description        int `json:"description"`
+	TitleGrammar       int `json:"titleGrammar"`
+	DescriptionGrammar int `json:"descriptionGrammar"`
+}
+
+type UserConfirmsQuestionEdge struct {
+	edge.Edge     `neo4j:"CONFIRMS"`
+	Grammar       int        `json:"grammar"`
+	AnswerCorrect int        `json:"answerCorrect"`
+	Prefix        int        `json:"prefix"`
+	Suffix        int        `json:"suffix"`
+	Figure        int        `json:"figure"`
+	UpdatedAt     *time.Time `json:"updatedAt"`
+}
+
+type UserCommentedOnQuestionGroupEdge struct {
+	edge.Edge `neo4j:"COMMENTED"`
+	ID        id.ID        `json:"id"`
+	Comment   string       `json:"comment"`
+	State     CommentState `json:"state"`
+	CreatedAt time.Time    `json:"createdAt"`
+	UpdatedAt *time.Time   `json:"updatedAt"`
+}
+
+type RegionWithSchoolHolidaysEdge struct {
+	edge.Edge `neo4j:"WITH"`
+}
+
+type UserModifiedQuestionEdge struct {
+	edge.Edge  `neo4j:"MODIFIED"`
+	ModifiedAt time.Time `json:"modifiedAt"`
+}
+
+type CurriculumHasStrandEdge struct {
+	edge.Edge `neo4j:"HAS"`
+}
+
+type SubstrandMapsToSubtopicEdge struct {
+	edge.Edge `neo4j:"MAPS_TO"`
+	Order     int `json:"order"`
+}
+
+type SubstrandTeachesElaborationEdge struct {
+	edge.Edge `neo4j:"TEACHES"`
+}
+
+type ElaborationLinksToSkillEdge struct {
+	edge.Edge `neo4j:"LINKS_TO"`
+}
+
+type CurriculumGeneratedForYearEdge struct {
+	edge.Edge       `neo4j:"GENERATED_FOR"`
+	SubstrandsCSV   *string `json:"substrandsCSV"`
+	ElaborationsCSV *string `json:"elaborationsCSV"`
+}
+
+// StrandIncludesSubstrandEdge represents the relationship between a strand and its associated substrands
+// within the context of a specific network. This edge is used to define which substrands are imported
+// for a given strand.
+//
+// NOTE: Strands are not shared across different curriculums. This design choice ensures that
+// data can be imported efficiently on a per-curriculum basis.
+type StrandIncludesSubstrandEdge struct {
+	edge.Edge `neo4j:"INCLUDES"` // Neo4j relationship type indicating inclusion.
+	NetworkID id.ID              `json:"networkID"` // Unique identifier for the network context.
+}
+
+// api/content/edges/network.go
+package edges
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+)
+
+// NetworkTeachesSkillEdge defines skills that are taught in a parent network.
+type NetworkTeachesSkillEdge struct {
+	edge.Edge    `neo4j:"TEACHES"`
+	CurriculumID id.ID `json:"curriculumID"`
+}
+
+type NetworkFallsBackToNetworkEdge struct {
+	edge.Edge `neo4j:"FALLS_BACK_TO"`
+}
+
+// NetworkIncludesSkillEdge is an edge type from a Network to a Skill under the context of a Subtopic and Curriculum.
+// It represents the skills that are included for the given Network and  in the Curriculum.
+type NetworkIncludesSkillEdge struct {
+	edge.Edge    `neo4j:"INCLUDES"`
+	TopicID      id.ID `json:"topicID"`
+	SubtopicID   id.ID `json:"subtopicID"`
+	CurriculumID id.ID `json:"curriculumID"`
+}
+
+// ParentSkillEdge defines a relationship between and parent and child Network.
+type ParentNetworkEdge struct {
+	edge.Edge `neo4j:"PARENT"`
+	CourseID  id.ID `json:"courseID"`
+}
+
+// api/content/edges/skill.go
+package edges
+
+import (
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+)
+
+// ParentSkillEdge defines a relationship between and parent and child Skill.
+type ParentSkillEdge struct {
+	edge.Edge `neo4j:"PARENT"`
+}
+
+// api/content/edges/subtopic.go
+package edges
+
+import (
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+)
+
+// SubtopicBaseSkillEdge is an edge type from a Subtopic to a Skill.
+// They define all the possible skills that can be studied in this Subtopic, irrespective of what
+// Topic + Network the Subtopic is realised under.
+type SubtopicBaseSkillEdge struct {
+	edge.Edge `neo4j:"BASE"`
+	// Order of the skill in the subtopic.
+	Order int `json:"order"`
+}
+
+type SubtopicPrerequisiteSkillEdge struct {
+	edge.Edge `neo4j:"PREREQUISITE"`
+	// Order of the skill in the subtopic.
+	Order int `json:"order"`
+	// Whether the prerequisite is excluded from the subtopic.
+	Excluded bool `json:"excluded"`
+}
+
+// api/content/implementers/implementers.go
+package implementers
+
+import (
+	"github.com/MathGaps/learning/v2/api/content/question"
+	"github.com/MathGaps/learning/v2/api/content/topic"
+	"github.com/MathGaps/learning/v2/api/platform/homework"
+	descriptivehomework "github.com/MathGaps/learning/v2/api/platform/homework/descriptive_homework"
+	practicequestionhomework "github.com/MathGaps/learning/v2/api/platform/homework/practice_question_homework"
+	subtopictesthomework "github.com/MathGaps/learning/v2/api/platform/homework/subtopic_test_homework"
+)
+
+var Question []question.Question = []question.Question{
+	&question.ShortQuestion{},
+	&question.MultiQuestion{},
+}
+
+var Homework []homework.Homework = []homework.Homework{
+	descriptivehomework.DescriptiveHomework{},
+	practicequestionhomework.PracticeQuestionHomework{},
+	subtopictesthomework.SubtopicTestHomework{},
+}
+
+var BaseTopic []topic.BaseTopic = []topic.BaseTopic{
+	topic.Topic{},
+	topic.Strand{},
+}
+
+// api/content/lesson_report/repository.go
+package lessonreport
+
+import (
+	"context"
+	"errors"
+	"strings"
+)
+
+type LessonReport struct {
+	TodaysLessons          []string `json:"todaysLessons"`
+	ProgressAndEngagements []string `json:"progressAndEngagements"`
+	UpcomingLearnings      []string `json:"upcomingLearnings"`
+}
+
+type Repository interface {
+	GenerateLessonReport(ctx context.Context, input GenerateReportInput) (*LessonReport, error)
+}
+
+type GenerateReportInput struct {
+	StudentName           string `json:"studentName"`
+	TodaysLesson          string `json:"todaysLesson"`
+	ProgressAndEngagement string `json:"progressAndEngagement"`
+	UpcomingLearnings     string `json:"upcomingLearnings"`
+}
+
+func (i *GenerateReportInput) FormatAndValidate() error {
+	i.StudentName = strings.TrimSpace(i.StudentName)
+	i.TodaysLesson = strings.TrimSpace(i.TodaysLesson)
+	i.ProgressAndEngagement = strings.TrimSpace(i.ProgressAndEngagement)
+	i.UpcomingLearnings = strings.TrimSpace(i.UpcomingLearnings)
+	return i.validate()
+}
+
+var (
+	ErrEmptyStudentName        = errors.New("student name is empty")
+	ErrEmptyTodaysLessonPrompt = errors.New("today's lesson prompt is empty")
+)
+
+func (i GenerateReportInput) validate() error {
+	if len(i.StudentName) == 0 {
+		return ErrEmptyStudentName
+	}
+	if len(i.TodaysLesson) == 0 {
+		return ErrEmptyTodaysLessonPrompt
+	}
+	return nil
+}
+
+// api/content/network/entity.go
+package network
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+)
+
+type Network struct {
+	node.Node     `neo4j:"Network,id:network"`
+	InternalTitle string `json:"title"`
+	PublicTitle   string `json:"publicTitle"`
+	Description   string `json:"description"`
+	Hidden        bool   `json:"hidden"`
+
+	Index int `json:"index" neo4j:"optional"`
+}
+
+type NetworkFilters struct {
+	Subjects            []id.ID `json:"subjects"`
+	NetworkGroups       []id.ID `json:"networkGroups"`
+	Courses             []id.ID `json:"courses"`
+	Hidden              *bool   `json:"hidden"`
+	WithoutNetworkGroup *bool   `json:"withoutNetworkGroup"`
+}
+
+type CreateNetworkInput struct {
+	Title           string `json:"title"`
+	PublicTitle     string `json:"publicTitle"`
+	Description     string `json:"description"`
+	Hidden          bool   `json:"hidden"`
+	FallbackNetwork *id.ID `json:"fallbackNetwork"`
+}
+
+type UpdateNetworkInput struct {
+	Title           *string `json:"title"`
+	PublicTitle     *string `json:"publicTitle"`
+	Description     *string `json:"description"`
+	Hidden          *bool   `json:"hidden"`
+	FallbackNetwork *id.ID  `json:"fallbackNetwork"`
+}
+
+type RemoveTopicFromNetworkInput struct {
+	NetworkID id.ID `json:"networkID"`
+	TopicID   id.ID `json:"topicID"`
+	Class     bool  `json:"class"`
+}
+
+// api/content/network/repository.go
+package network
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/pagination"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+	questiontype "github.com/MathGaps/learning/v2/api/content/question_type"
+	"github.com/MathGaps/learning/v2/api/content/year"
+)
+
+type Repository interface {
+	repository.CRUDRepository[Network]
+	CreateNetwork(ctx context.Context, input CreateNetworkInput, fallbackNetworkID *id.ID) (*Network, error)
+	UpdateNetwork(ctx context.Context, networkID id.ID, input UpdateNetworkInput, fallbackNetworkID *id.ID) (*Network, error)
+	Archive(ctx context.Context, networkID id.ID) error
+	NetworksInNetworkGroup(ctx context.Context, networkGroupID id.ID, options *edge.GetAllEdgeOptions) ([]*Network, error)
+	NetworksInNetworkGroupCount(ctx context.Context, networkGroupID id.ID) (int, error)
+	NetworksLinkedToSubject(ctx context.Context, input NetworksLinkedToSubjectInput, options *edge.GetAllEdgeOptions) ([]*Network, error)
+	NetworksLinkedToSubjectCount(ctx context.Context, subjectID id.ID) (int, error)
+	NetworksWhere(ctx context.Context, filters *NetworkFilters, options *pagination.PaginationOptions) (*pagination.Connection[Network], error)
+	GetParentNetworks(ctx context.Context, networkID, courseID id.ID, options *edge.GetAllEdgeOptions) ([]*Network, error)
+	GetChildrenNetworks(ctx context.Context, networkID, courseID id.ID, options *edge.GetAllEdgeOptions) ([]*Network, error)
+	GetAllParentNetworks(ctx context.Context, networkID id.ID, options *pagination.GetAllOptions) ([]*Network, error)
+	GetAllChildrenNetworks(ctx context.Context, networkID id.ID, options *pagination.GetAllOptions) ([]*Network, error)
+	NetworksIncludingSkill(ctx context.Context, skillID id.ID, options *edge.GetAllEdgeOptions) ([]*Network, error)
+	GetFallbackNetwork(ctx context.Context, networkID id.ID) (*Network, error)
+	UpdateFallbackNetwork(ctx context.Context, networkID, fallbackNetworkID id.ID) (*edges.NetworkFallsBackToNetworkEdge, error)
+	DeleteFallbackNetwork(ctx context.Context, networkID, fallbackNetworkID id.ID) (*edge.Edge, error)
+	NetworkLinkedToStream(ctx context.Context, streamID, courseID, yearID id.ID) (*Network, error)
+	TotalQuestions(ctx context.Context, networkID id.ID, questionType *questiontype.QuestionType) (int, error)
+	TotalSkills(ctx context.Context, networkID id.ID) (int, error)
+	AllNetworks(ctx context.Context, filters *NetworkFilters, options *pagination.GetAllOptions) ([]*Network, error)
+	AllYearsInNetwork(ctx context.Context, networkID id.ID) ([]*year.Year, error)
+	NetworksInCurriculum(ctx context.Context, curriculumID id.ID) ([]*Network, error)
+	UpdateSkillsInNetwork(ctx context.Context, networkID, curriculumID id.ID, inputs []SkillInNetworkInput) ([]*edges.NetworkIncludesSkillEdge, error)
+	UpdateTaughtNodesInNetwork(ctx context.Context, networkID, curriculumID id.ID, skillIDs []id.ID) ([]*edges.NetworkTeachesSkillEdge, error)
+	ImportCurriculumForNetwork(ctx context.Context, sourceID, targetID, networkID id.ID) (*Network, error)
+	EvictNetworkTaughtSkillsFromCache(ctx context.Context) error
+}
+
+type NetworksLinkedToSubjectInput struct {
+	SubjectID id.ID  `json:"subjectID"`
+	CourseID  *id.ID `json:"courseID"`
+	StreamID  *id.ID `json:"streamID"`
+	YearID    *id.ID `json:"yearID"`
+}
+
+type SkillInNetworkInput struct {
+	SkillID    id.ID `json:"skillID"`
+	TopicID    id.ID `json:"topicID"`
+	SubtopicID id.ID `json:"subtopicID"`
+}
+
+const NetworkTeachesSkillCacheKeyPrefix = "network-teaches-skill"
+
+type NetworkTeachesSkillCacheKey struct {
+	NetworkID    id.ID
+	CurriculumID id.ID
+	SkillID      id.ID
+}
+
+func (n NetworkTeachesSkillCacheKey) String() string {
+	return fmt.Sprintf("%s/network:%s/curriculum:%s/skill:%s", NetworkTeachesSkillCacheKeyPrefix, n.NetworkID, n.CurriculumID, n.SkillID)
+}
+
+// api/content/network_group/entity.go
+package networkgroup
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+)
+
+type NetworkGroup struct {
+	node.Node   `neo4j:"NetworkGroup,id:network"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Priority    int    `json:"priority"`
+}
+
+type NetworkGroupFilters struct {
+	Subjects        *[]id.ID
+	WithoutSubjects *bool
+}
+
+// api/content/network_group/repository.go
+package networkgroup
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/pagination"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+)
+
+type Repository interface {
+	repository.CRUDRepository[NetworkGroup]
+	AddNetworkToNetworkGroup(ctx context.Context, networkGroupInGroupNetworkEdge edges.NetworkGroupInGroupNetworkEdge) (*edges.NetworkGroupInGroupNetworkEdge, error)
+	RemoveNetworkFromNetworkGroup(ctx context.Context, networkGroupID, networkID id.ID) error
+	NetworkGroupsLinkedSubject(ctx context.Context, subjectID id.ID, options *edge.GetAllEdgeOptions) ([]*NetworkGroup, error)
+	NetworkGroupsLinkedToSubjectCount(ctx context.Context, subjectID id.ID) (int, error)
+	NetworkGroupLinkedToNetwork(ctx context.Context, networkID id.ID) (*NetworkGroup, error)
+	AllNetworkGroups(ctx context.Context, options *pagination.GetAllOptions) ([]*NetworkGroup, error)
+	NetworkGroupsWhere(ctx context.Context, networkGroupFilters *NetworkGroupFilters, options *pagination.PaginationOptions) (*pagination.Connection[NetworkGroup], error)
+}
+
+// api/content/question/entity.go
+package question
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+	"github.com/rlch/neogo"
+
+	questionfeed "github.com/MathGaps/learning/v2/api/content/question_feed"
+	questiontype "github.com/MathGaps/learning/v2/api/content/question_type"
+)
+
+var (
+	_ Question     = (*ShortQuestion)(nil)
+	_ Question     = (*MultiQuestion)(nil)
+	_ UserQuestion = (*ShortQuestion)(nil)
+	_ UserQuestion = (*MultiQuestion)(nil)
+	_ UserAnswer   = (*Answer)(nil)
+)
+
+type Question interface {
+	UserQuestion
+	Base() BaseQuestion
+	ReadyToAddToDB(QuestionConfirmation) bool
+}
+
+type UserQuestion interface {
+	node.IAbstract
+	IsQuestion()
+	IsEntity()
+	ID() id.ID
+	UserBase() BaseUserQuestion
+}
+
+type (
+	AnswerFormat   string
+	QuestionFormat string
+	QuestionState  string
+	ImageOption    string
+
+	QuestionQuality            string
+	QuestionDifficulty         string
+	QuestionPracticePhase      string
+	QuestionLanguageComplexity string
+
+	SkillQuestionType string
+)
+
+const (
+	AnswerFormatWhole        AnswerFormat = "WHOLE"
+	AnswerFormatDecimal      AnswerFormat = "DECIMAL"
+	AnswerFormatFraction     AnswerFormat = "FRACTION"
+	AnswerFormatText         AnswerFormat = "TEXT"
+	AnswerFormatMathKeyboard AnswerFormat = "MATH_KEYBOARD"
+	AnswerFormatOpenEnded    AnswerFormat = "OPEN_ENDED"
+
+	QuestionFormatShort QuestionFormat = "SHORT"
+	QuestionFormatMulti QuestionFormat = "MULTI"
+
+	RequiresChecking QuestionState = "REQUIRES_CHECKING"
+	ImagesRequested  QuestionState = "IMAGES_REQUESTED"
+	UpForReview      QuestionState = "UP_FOR_REVIEW"
+	NegativeChecking QuestionState = "NEGATIVE_CHECKING"
+	NeedsRefactoring QuestionState = "NEEDS_REFACTORING"
+	Checked          QuestionState = "CHECKED"
+
+	All                               ImageOption = "ALL"
+	ImageRequests                     ImageOption = "IMAGE_REQUESTS"
+	ImageRequestsAwaitingConfirmation ImageOption = "IMAGE_REQUESTS_AWAITING_CONFIRMATION"
+	ImageRequestsAwaitingReview       ImageOption = "IMAGE_REQUESTS_AWAITING_REVIEW"
+	ImagesAwaitingReview              ImageOption = "IMAGES_AWAITING_REVIEW"
+	ImagesAwaitingConfirmation        ImageOption = "IMAGES_AWAITING_CONFIRMATION"
+	ConfirmedImages                   ImageOption = "CONFIRMED_IMAGES"
+	ImagesToFix                       ImageOption = "IMAGES_TO_FIX"
+	RequestedImagesToFix              ImageOption = "REQUESTED_IMAGES_TO_FIX"
+
+	QuestionQualityLow   QuestionQuality = "AVERAGE"
+	QuestionQualityGood  QuestionQuality = "GOOD"
+	QuestionQualityGreat QuestionQuality = "GREAT"
+
+	QuestionDifficultyEasy      QuestionDifficulty = "EASY"
+	QuestionDifficultyMedium    QuestionDifficulty = "MEDIUM"
+	QuestionDifficultyHard      QuestionDifficulty = "HARD"
+	QuestionDifficultyExtension QuestionDifficulty = "EXT"
+	// Deprecated: Merged with Easy
+	QuestionDifficultyTeacherQuestion QuestionDifficulty = "TEACHER_QUESTION"
+
+	QuestionPracticePhaseTeacherQuestions QuestionPracticePhase = "TEACHER_QUESTION"
+	QuestionPracticePhaseClassPractice    QuestionPracticePhase = "CLASS_PRACTICE"
+	QuestionPracticePhaseIDo              QuestionPracticePhase = "I_DO"
+	QuestionPracticePhaseWeDo             QuestionPracticePhase = "WE_DO"
+	QuestionPracticePhaseYouDo            QuestionPracticePhase = "YOU_DO"
+
+	QuestionLanguageComplexityEasy   QuestionLanguageComplexity = "EASY"
+	QuestionLanguageComplexityMedium QuestionLanguageComplexity = "MEDIUM"
+	QuestionLanguageComplexityHard   QuestionLanguageComplexity = "HARD"
+
+	SkillQuestionTypeMultiChoice SkillQuestionType = "MULTI_CHOICE"
+	SkillQuestionTypeShortAnswer SkillQuestionType = "SHORT_ANSWER"
+	SkillQuestionTypeOpenEnded   SkillQuestionType = "OPEN_ENDED"
+)
+
+var (
+	TutoringPracticePhases = []QuestionPracticePhase{
+		QuestionPracticePhaseIDo,
+		QuestionPracticePhaseWeDo,
+		QuestionPracticePhaseYouDo,
+	}
+	SchoolsPracticePhases = []QuestionPracticePhase{
+		QuestionPracticePhaseTeacherQuestions,
+		QuestionPracticePhaseClassPractice,
+	}
+	QuestionDifficulties = []QuestionDifficulty{
+		QuestionDifficultyEasy,
+		QuestionDifficultyMedium,
+		QuestionDifficultyHard,
+		QuestionDifficultyExtension,
+	}
+	SkillQuestionTypes = []SkillQuestionType{
+		SkillQuestionTypeMultiChoice,
+		SkillQuestionTypeShortAnswer,
+		SkillQuestionTypeOpenEnded,
+	}
+)
+
+type QuillDocumentNode struct {
+	neogo.Label   `neo4j:"QuillDocumentNode"`
+	QuillDocument string `json:"quillDocument" neo4j:"optional"`
+}
+
+type BaseUserQuestion struct {
+	node.Abstract `baseType:"UserQuestion"`
+	QuillDocumentNode
+	Figure     *string             `json:"figure" neo4j:"optional"`
+	Difficulty *QuestionDifficulty `json:"difficulty" neo4j:"optional"`
+}
+
+func (BaseUserQuestion) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&ShortQuestion{},
+		&MultiQuestion{},
+	}
+}
+
+type BaseQuestion struct {
+	node.Abstract `baseType:"Question"`
+	BaseUserQuestion
+	Types              []questiontype.QuestionType `json:"types"`
+	Content            string                      `json:"content"`
+	Calculator         bool                        `json:"calculator"`
+	Hint               string                      `json:"hint"`
+	Deleted            bool                        `json:"deleted"`
+	Archived           bool                        `json:"archived" neo4j:"optional"`
+	Confirmed          bool                        `json:"confirmed"`
+	ConfirmedAt        *time.Time                  `json:"confirmedAt" neo4j:"optional"`
+	ConfirmedBy        *id.ID                      `json:"confirmedBy" neo4j:"optional"`
+	Quality            *QuestionQuality            `json:"quality" neo4j:"optional"`
+	LanguageComplexity *QuestionLanguageComplexity `json:"languageComplexity" neo4j:"optional"`
+	NeedsRefactoring   bool                        `json:"needsRefactoring"`
+	BecameActiveAt     *time.Time                  `json:"becameActiveAt"`
+	Active             bool                        `json:"active"`
+	UUID               string                      `json:"uuid"`
+	ValidBrainTeaser   bool                        `json:"validBrainTeaser"`
+}
+
+func (BaseQuestion) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&ShortQuestion{},
+		&MultiQuestion{},
+	}
+}
+
+type ShortQuestion struct {
+	node.Node `neo4j:"ShortQuestion,id:sqn"`
+	BaseQuestion
+	Exact        bool         `json:"exact"`
+	Decimals     int          `json:"decimals"`
+	Prefix       *string      `json:"prefix" neo4j:"optional"`
+	Suffix       *string      `json:"suffix" neo4j:"optional"`
+	ShowHelper   bool         `json:"showHelper"`
+	AnswerFormat AnswerFormat `json:"answerFormat"`
+}
+
+func (ShortQuestion) IsQuestion() {}
+func (r ShortQuestion) ID() id.ID {
+	return r.Node.ID
+}
+
+func (r ShortQuestion) Base() BaseQuestion {
+	return r.BaseQuestion
+}
+
+func (r ShortQuestion) UserBase() BaseUserQuestion {
+	return r.BaseUserQuestion
+}
+
+func (r ShortQuestion) ReadyToAddToDB(confirmation QuestionConfirmation) bool {
+	return confirmation.AnswerCorrect > 1 &&
+		(r.Figure == nil || confirmation.Figure >= 1) &&
+		(r.Prefix == nil || confirmation.Prefix > 0) &&
+		(r.Suffix == nil || confirmation.Suffix > 0) &&
+		confirmation.Grammar > 0
+}
+
+func (ShortQuestion) IsEntity() {}
+
+type MultiQuestion struct {
+	node.Node `neo4j:"MultiQuestion,id:mqn"`
+	BaseQuestion
+}
+
+func (MultiQuestion) IsQuestion() {}
+func (r MultiQuestion) ID() id.ID {
+	return r.Node.ID
+}
+
+func (r MultiQuestion) Base() BaseQuestion {
+	return r.BaseQuestion
+}
+
+func (r MultiQuestion) UserBase() BaseUserQuestion {
+	return r.BaseUserQuestion
+}
+
+func (r MultiQuestion) ReadyToAddToDB(confirmation QuestionConfirmation) bool {
+	return confirmation.AnswerCorrect > 1 &&
+		(r.Figure == nil || confirmation.Figure >= 1) &&
+		confirmation.Grammar > 0
+}
+
+func (MultiQuestion) IsEntity() {}
+
+type UserAnswer interface {
+	node.IAbstract
+	IsEntity()
+	GetID() id.ID
+	Base() BaseAnswer
+}
+
+type BaseAnswer struct {
+	node.Abstract `baseType:"UserAnswer"`
+	QuillDocumentNode
+	IsCorrect bool `json:"isCorrect"`
+}
+
+func (BaseAnswer) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&Answer{},
+	}
+}
+
+type Answer struct {
+	node.Node `neo4j:"Answer,id:ans"`
+	BaseAnswer
+	Content string  `json:"content"`
+	Figure  *string `json:"figure" neo4j:"optional"`
+}
+
+func (Answer) IsEntity() {}
+
+func (r Answer) GetID() id.ID {
+	return r.ID
+}
+
+func (r Answer) Base() BaseAnswer {
+	return r.BaseAnswer
+}
+
+// Does not embed a node.Node, as we store worked solution as a json string in neo4j
+// We Unmarshal the json to the following struct to serve via graphql
+type WorkedSolution struct {
+	ID           id.ID                `json:"id"`
+	MathOverview string               `json:"mathOverview"`
+	Solution     []WorkedSolutionStep `json:"solution"`
+}
+
+type WorkedSolutionStep struct {
+	Instruction  string   `json:"instruction"`
+	Calculations []string `json:"calculations"`
+}
+
+type ImageRequest struct {
+	node.Node     `neo4j:"ImageRequest,id:ir"`
+	URL           string   `json:"url"`
+	HelperFigures []string `json:"helperFigures"`
+}
+
+type QuestionConfirmation struct {
+	Grammar       int `json:"grammar"`
+	AnswerCorrect int `json:"answerCorrect"`
+	Prefix        int `json:"prefix"`
+	Suffix        int `json:"suffix"`
+	Figure        int `json:"figure"`
+}
+
+type QuestionConfirmationInput struct {
+	Grammar       *bool `json:"grammar"`
+	AnswerCorrect *bool `json:"answerCorrect"`
+	Prefix        *bool `json:"prefix"`
+	Suffix        *bool `json:"suffix"`
+	Figure        *bool `json:"figure"`
+}
+
+type QuestionTagInput struct {
+	Quality            *QuestionQuality            `json:"quality,omitempty"`
+	Difficulty         *QuestionDifficulty         `json:"difficulty,omitempty"`
+	LanguageComplexity *QuestionLanguageComplexity `json:"languageComplexity,omitempty"`
+}
+
+func (q QuestionConfirmation) HasError() bool {
+	return q.Grammar < 0 || q.AnswerCorrect < 0 || q.Prefix < 0 || q.Suffix < 0 || q.Figure < 0
+}
+
+type AnswerPracticeQuestionInput struct {
+	Answer    string
+	IsCorrect bool
+}
+
+type QuestionFilters struct {
+	States            []questionfeed.QuestionFeedState `json:"states"`
+	QuestionType      *questiontype.QuestionType       `json:"questionType"`
+	QuestionFormat    *QuestionFormat                  `json:"questionFormat"`
+	HasSuffixOrPrefix *bool                            `json:"hasSuffixOrPrefix"`
+	Writer            *id.ID                           `json:"writer"`
+	Reviewer          *id.ID                           `json:"reviewer"`
+	ImageOption       *ImageOption                     `json:"ImageOption"`
+	Deleted           *bool                            `json:"deleted"`
+}
+
+type AnswerDetails struct {
+	Score     float64 `json:"score"`
+	IsCorrect bool    `json:"isCorrect"`
+}
+
+// GetResetConfirmationInput compares the fields of two questions and generates a QuestionConfirmationInput for resetting the confirmation state.
+func GetResetConfirmationInput(oldQuestion, currentQuestion Question, changedType bool) QuestionConfirmationInput {
+	input := QuestionConfirmationInput{}
+	boolPtr := func(b bool) *bool { return &b }
+	// safely compare two *string values, accounting for nil pointers
+	unequalStringP := func(a, b *string) *bool {
+		if a == nil || b == nil {
+			return boolPtr(a != b)
+		}
+		return boolPtr(*a != *b)
+	}
+	// On question type change, answer is reset
+	if changedType {
+		input.AnswerCorrect = boolPtr(true)
+	}
+	input.Grammar = boolPtr(oldQuestion.Base().Content != currentQuestion.Base().Content || oldQuestion.Base().Hint != currentQuestion.Base().Hint)
+	input.Figure = unequalStringP(oldQuestion.Base().Figure, currentQuestion.Base().Figure)
+
+	if oldShortQuestion, ok := oldQuestion.(*ShortQuestion); ok {
+		currentShortQuestion := currentQuestion.(*ShortQuestion)
+		input.Prefix = unequalStringP(oldShortQuestion.Prefix, currentShortQuestion.Prefix)
+		input.Suffix = unequalStringP(oldShortQuestion.Suffix, currentShortQuestion.Suffix)
+	}
+	return input
+}
+
+// GraphqlQL types from resources service, to sastisfy the supergraph composition
+type LessonPlanUserQuestion struct {
+	node.Node `neo4j:"LessonPlanQuestion,id:lpquestion"`
+	BaseQuestion
+}
+
+func (LessonPlanUserQuestion) IsQuestion() {}
+func (LessonPlanUserQuestion) IsEntity()   {}
+func (r LessonPlanUserQuestion) ID() id.ID {
+	return r.Node.ID
+}
+
+func (r LessonPlanUserQuestion) Base() BaseQuestion {
+	return r.BaseQuestion
+}
+
+func (r LessonPlanUserQuestion) UserBase() BaseUserQuestion {
+	return r.BaseUserQuestion
+}
+
+func (r LessonPlanUserQuestion) ReadyToAddToDB(confirmation QuestionConfirmation) bool {
+	return false
+}
+
+type LessonPlanAnswer struct {
+	node.Node `neo4j:"LessonPlanAnswer,id:lpans"`
+	BaseAnswer
+}
+
+func (r LessonPlanAnswer) GetID() id.ID {
+	return r.ID
+}
+func (LessonPlanAnswer) IsEntity()     {}
+func (LessonPlanAnswer) IsUserAnswer() {}
+func (r LessonPlanAnswer) Base() BaseAnswer {
+	return r.BaseAnswer
+}
+
+// api/content/question/helpers.go
+package question
+
+import (
+	"fmt"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+)
+
+func CollectConfirmsEdges(confirmations []*edges.UserConfirmsQuestionEdge) QuestionConfirmation {
+	confirmation := QuestionConfirmation{}
+	for _, edge := range confirmations {
+		confirmation.Grammar += edge.Grammar
+		confirmation.AnswerCorrect += edge.AnswerCorrect
+		confirmation.Prefix += edge.Prefix
+		confirmation.Suffix += edge.Suffix
+		confirmation.Figure += edge.Figure
+	}
+	return confirmation
+}
+
+func InputToConfirmationEdge(userID, questionID id.ID, input QuestionConfirmationInput) edges.UserConfirmsQuestionEdge {
+	toInt := func(b *bool) int {
+		if b == nil {
+			return 0
+		} else if *b {
+			return 1
+		} else {
+			return -1
+		}
+	}
+
+	return edges.UserConfirmsQuestionEdge{
+		Edge:          edge.Edge{FromID: userID, ToID: questionID},
+		Grammar:       toInt(input.Grammar),
+		AnswerCorrect: toInt(input.AnswerCorrect),
+		Prefix:        toInt(input.Prefix),
+		Suffix:        toInt(input.Suffix),
+		Figure:        toInt(input.Figure),
+	}
+}
+
+func GetActiveQuestionCacheKey(questionID id.ID) string {
+	return fmt.Sprintf("activeQuestion_%s", questionID)
+}
+
+// api/content/question/helpers_test.go
+package question_test
+
+//
+import (
+	"testing"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/stretchr/testify/assert"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+	"github.com/MathGaps/learning/v2/api/content/question"
+)
+
+func TestEdgeToConfirmation(t *testing.T) {
+	assert := assert.New(t)
+	tbls := []struct {
+		confirmations []*edges.UserConfirmsQuestionEdge
+		expected      question.QuestionConfirmation
+	}{
+		{
+			[]*edges.UserConfirmsQuestionEdge{
+				{Grammar: 1, AnswerCorrect: 1, Prefix: 1, Suffix: 1, Figure: 1},
+				{Grammar: 1, AnswerCorrect: 1, Prefix: 1, Suffix: 1, Figure: 1},
+				{Grammar: 1, AnswerCorrect: 1, Prefix: 1, Suffix: 1, Figure: 1},
+			},
+			question.QuestionConfirmation{
+				Grammar:       3,
+				AnswerCorrect: 3,
+				Prefix:        3,
+				Suffix:        3,
+				Figure:        3,
+			},
+		},
+		{
+			[]*edges.UserConfirmsQuestionEdge{
+				{Grammar: 0, AnswerCorrect: 1, Prefix: 1, Suffix: 1, Figure: 0},
+				{Grammar: 1, AnswerCorrect: 0, Prefix: 0, Suffix: 1, Figure: 0},
+				{Grammar: 1, AnswerCorrect: 1, Prefix: 0, Suffix: 1, Figure: 0},
+			},
+			question.QuestionConfirmation{
+				Grammar:       2,
+				AnswerCorrect: 2,
+				Prefix:        1,
+				Suffix:        3,
+				Figure:        0,
+			},
+		},
+		{
+			[]*edges.UserConfirmsQuestionEdge{
+				{Grammar: -1, AnswerCorrect: 1, Prefix: -1, Suffix: 1, Figure: 0},
+				{Grammar: 1, AnswerCorrect: 0, Prefix: 0, Suffix: 1, Figure: 0},
+				{Grammar: 1, AnswerCorrect: 1, Prefix: 0, Suffix: 1, Figure: 0},
+			},
+			question.QuestionConfirmation{
+				Grammar:       1,
+				AnswerCorrect: 2,
+				Prefix:        -1,
+				Suffix:        3,
+				Figure:        0,
+			},
+		},
+	}
+
+	for _, tbl := range tbls {
+		assert.Equal(question.CollectConfirmsEdges(tbl.confirmations), tbl.expected)
+	}
+}
+
+func TestInputToConfirmationEdge(t *testing.T) {
+	assert := assert.New(t)
+
+	trueVal := true
+	falseVal := false
+	edge := edge.Edge{FromID: id.ID("userID"), ToID: id.ID("skillID")}
+
+	tbls := []struct {
+		input    question.QuestionConfirmationInput
+		expected edges.UserConfirmsQuestionEdge
+	}{
+		{
+			question.QuestionConfirmationInput{
+				Grammar:       &trueVal,
+				AnswerCorrect: &trueVal,
+				Prefix:        &trueVal,
+				Suffix:        &trueVal,
+				Figure:        &trueVal,
+			},
+			edges.UserConfirmsQuestionEdge{
+				Edge:          edge,
+				Grammar:       1,
+				AnswerCorrect: 1,
+				Prefix:        1,
+				Suffix:        1,
+				Figure:        1,
+			},
+		},
+		{
+			question.QuestionConfirmationInput{
+				Grammar:       &falseVal,
+				AnswerCorrect: &falseVal,
+				Prefix:        &falseVal,
+				Suffix:        &falseVal,
+				Figure:        &falseVal,
+			},
+			edges.UserConfirmsQuestionEdge{
+				Edge:          edge,
+				Grammar:       -1,
+				AnswerCorrect: -1,
+				Prefix:        -1,
+				Suffix:        -1,
+				Figure:        -1,
+			},
+		},
+		{
+			question.QuestionConfirmationInput{},
+			edges.UserConfirmsQuestionEdge{Edge: edge},
+		},
+		{
+			question.QuestionConfirmationInput{
+				AnswerCorrect: &trueVal,
+				Figure:        &falseVal,
+			},
+			edges.UserConfirmsQuestionEdge{
+				Edge:          edge,
+				AnswerCorrect: 1,
+				Figure:        -1,
+			},
+		},
+	}
+
+	for _, tbl := range tbls {
+		assert.Equal(question.InputToConfirmationEdge(edge.FromID, edge.ToID, tbl.input), tbl.expected)
+	}
+}
+
+func TestHasError(t *testing.T) {
+	assert := assert.New(t)
+	tbls := []struct {
+		confirmation question.QuestionConfirmation
+		expected     bool
+	}{
+		{question.QuestionConfirmation{Grammar: 3, AnswerCorrect: 3, Prefix: 3, Suffix: 3, Figure: 3}, false},
+		{question.QuestionConfirmation{Grammar: 2, AnswerCorrect: 2, Prefix: 1, Suffix: 3, Figure: 3}, false},
+		{question.QuestionConfirmation{Grammar: -1, AnswerCorrect: 2, Prefix: 1, Suffix: 3, Figure: 3}, true},
+		{question.QuestionConfirmation{Grammar: 2, AnswerCorrect: -1, Prefix: 1, Suffix: 3, Figure: 3}, true},
+		{question.QuestionConfirmation{Grammar: 2, AnswerCorrect: 2, Prefix: 0, Suffix: -1, Figure: 3}, true},
+	}
+
+	for _, tbl := range tbls {
+		assert.Equal(tbl.confirmation.HasError(), tbl.expected)
+	}
+}
+
+// api/content/question/multi_question/repository.go
+package multiquestion
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/learning/v2/api/content/question"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+)
+
+type Repository interface {
+	repository.CRUDRepository[question.MultiQuestion]
+	CreateMultiQuestion(ctx context.Context, input func(*question.MultiQuestion)) (*question.MultiQuestion, error)
+	UpdateMultiQuestion(ctx context.Context, questionID id.ID, input func(*question.MultiQuestion)) (*question.MultiQuestion, error)
+}
+
+// api/content/question/repository.go
+package question
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/pagination"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+	questionfeed "github.com/MathGaps/learning/v2/api/content/question_feed"
+	questiongroup "github.com/MathGaps/learning/v2/api/content/question_group"
+	questiontype "github.com/MathGaps/learning/v2/api/content/question_type"
+)
+
+type Repository interface {
+	repository.AbstractCRUDRepository[Question]
+	Archive(ctx context.Context, questionID id.ID) (id.ID, error)
+	AddAnswer(ctx context.Context, questionID id.ID, answer Answer) (*Answer, error)
+	AddAnswers(ctx context.Context, questionID id.ID, answers []*Answer) ([]*Answer, error)
+	RemoveAnswer(ctx context.Context, questionID, answerID id.ID) error
+	GetAnswers(ctx context.Context, questionID id.ID) ([]*Answer, error)
+	AddSkillToAnswer(ctx context.Context, input edges.AnswerDiagnosesSkillEdge) (*edges.AnswerDiagnosesSkillEdge, error)
+	RemoveSkillFromAnswer(ctx context.Context, answerID, skillID id.ID) (*edge.Edge, error)
+	AddImageRequest(ctx context.Context, questionID id.ID, imageRequest ImageRequest) (*ImageRequest, error)
+	RemoveImageRequest(ctx context.Context, questionID, imageRequestID id.ID) (id.ID, error)
+	GetImageRequests(ctx context.Context, questionID id.ID, options *edge.GetAllEdgeOptions) ([]*ImageRequest, error)
+	AddConfirmation(ctx context.Context, questionID id.ID, input QuestionConfirmationInput) (*QuestionConfirmation, error)
+	GetConfirmation(ctx context.Context, questionID id.ID, options *edge.GetAllEdgeOptions) (*QuestionConfirmation, error)
+	ResetConfirmation(ctx context.Context, questionID id.ID, input QuestionConfirmationInput) (id.ID, error)
+	QuestionsWhere(ctx context.Context, filters *QuestionFilters, options *pagination.PaginationOptions) (*pagination.Connection[Question], error)
+	GetQuestionGroups(ctx context.Context, questionID id.ID) ([]*questiongroup.QuestionGroup, error)
+	GetAllQuestionsInQuestionGroup(
+		ctx context.Context,
+		questionGroupID id.ID,
+		questionType *questiontype.QuestionType,
+		ignoredQuestionIDs []id.ID,
+		options *edge.GetAllEdgeOptions,
+		active bool,
+	) ([]Question, error)
+	GetQuestionStates(ctx context.Context, inputQuestion Question) ([]questionfeed.QuestionFeedState, error)
+	AllWriters(ctx context.Context) ([]id.ID, error)
+	AllConfirmers(ctx context.Context) ([]id.ID, error)
+	CheckAnswer(ctx context.Context, questionID id.ID, content string) (bool, error)
+	GetQuestionsForInducedSubgraph(ctx context.Context, skills []string) ([]string, error)
+	GetAllQuestionData(ctx context.Context) ([]QuestionData, error)
+	GetCorrectAnswer(ctx context.Context, questionID id.ID) (*Answer, error)
+	ReorderQuestionInQuestionGroup(ctx context.Context, questionID id.ID, questionGroupID id.ID, order int) ([]id.ID, error)
+	AllModifiers(ctx context.Context, questionID id.ID) ([]*edges.UserModifiedQuestionEdge, error)
+	AutomaticUpdate(ctx context.Context, questionID id.ID) (Question, error)
+	GetQuestionsStates(ctx context.Context, ids []id.ID) ([][]questionfeed.QuestionFeedState, error)
+	ComputeQuestionActiveState(ctx context.Context, questionID id.ID) (_ bool, err error)
+	TagQuestion(ctx context.Context, questionID id.ID, input QuestionTagInput) (Question, error)
+	ReportQuestion(ctx context.Context, input ReportQuestionInput) (bool, error)
+	ResetQuestionState(ctx context.Context, questionID id.ID) error
+	GetWorkedSolution(ctx context.Context, questionID id.ID) (*WorkedSolution, error)
+	GetExampleQuestionsForSkill(ctx context.Context, skillId id.ID) ([]Question, error)
+}
+
+type QuestionData struct {
+	QuestionID string         `json:"questionID"`
+	Type       QuestionFormat `json:"type"`
+	Answers    []struct {
+		SkillID   string  `json:"skillID"`
+		Score     float64 `json:"score"`
+		IsCorrect bool    `json:"isCorrect"`
+	} `json:"answers"`
+}
+
+type IssueType string
+
+const (
+	IssueTypeGrammarError    IssueType = "GRAMMAR_ERROR"
+	IssueTypeIncorrectAnswer IssueType = "INCORRECT_ANSWER"
+	IssueTypeImageError      IssueType = "IMAGE_ERROR"
+	IssueTypeWrongSkill      IssueType = "WRONG_SKILL"
+	IssueTypeWorkedSolution  IssueType = "WORKED_SOLUTION"
+	IssueTypeOther           IssueType = "OTHER"
+)
+
+type ReportQuestionInput struct {
+	Question    string    `json:"question"`
+	Answer      string    `json:"answer"`
+	IssueType   IssueType `json:"issueType"`
+	Description string    `json:"description"`
+}
+
+// api/content/question/short_question/repository.go
+package shortquestion
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/learning/v2/api/content/question"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+)
+
+type Repository interface {
+	repository.CRUDRepository[question.ShortQuestion]
+	CreateShortQuestion(ctx context.Context, input func(*question.ShortQuestion)) (*question.ShortQuestion, error)
+	UpdateShortQuestion(ctx context.Context, questionID id.ID, input func(*question.ShortQuestion)) (*question.ShortQuestion, error)
+}
+
+// api/content/question_feed/states.go
+package questionfeed
+
+// QuestionFeedState is used to represent the state of a question, question group and skill in a question feed.
+type QuestionFeedState string
+
+const (
+	// RequiresChecking is whether confirmations are not satisfied
+	RequiresChecking QuestionFeedState = "REQUIRES_CHECKING"
+	// ImagesRequested is whether one or more question have pending image requests
+	ImagesRequested QuestionFeedState = "IMAGES_REQUESTED"
+	// UpForReview is whether confirmations are satisfied and the question is ready
+	UpForReview QuestionFeedState = "UP_FOR_REVIEW"
+	// NegativeChecking is whether sum of one or more question confirmation doesn't resolve to positive value
+	NegativeChecking QuestionFeedState = "NEGATIVE_CHECKING"
+	// Requests are used to indicate that there is request to add question in given Question Group
+	Requests QuestionFeedState = "REQUESTS"
+	// NegativeComments is whether there is unresolved comments on question group
+	NegativeComments QuestionFeedState = "NEGATIVE_COMMENTS"
+	NeedsRefactoring QuestionFeedState = "NEEDS_REFACTORING"
+	UnseenComments   QuestionFeedState = "UNSEEN_COMMENTS"
+	NoQuestions      QuestionFeedState = "NO_QUESTIONS"
+	Checked          QuestionFeedState = "CHECKED"
+)
+
+// api/content/question_group/entity.go
+package questiongroup
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+	questiontype "github.com/MathGaps/learning/v2/api/content/question_type"
+)
+
+type QuestionGroup struct {
+	node.Node        `neo4j:"QuestionGroup,id:qg"`
+	Title            string `json:"title"`
+	Description      string `json:"description"`
+	QuestionRequests int    `json:"questionRequests"`
+
+	IgnoredQuestionIDs []id.ID `json:"-"`
+}
+
+type CreateQuestionGroupCommentInput struct {
+	QuestionGroupID id.ID              `json:"questionGroupID"`
+	Comment         string             `json:"comment"`
+	State           edges.CommentState `json:"state"`
+}
+
+type UpdateQuestionGroupCommentInput struct {
+	QuestionGroupID id.ID               `json:"questionGroupID"`
+	ID              id.ID               `json:"id"`
+	Comment         *string             `json:"comment"`
+	State           *edges.CommentState `json:"state"`
+}
+
+type DeleteQuestionGroupCommentInput struct {
+	QuestionGroupID id.ID `json:"questionGroupID"`
+	ID              id.ID `json:"id"`
+}
+
+type QuestionGroupsLinkedToSkillInput struct {
+	QuestionType questiontype.QuestionType
+	YearID       *id.ID `json:"yearID"`
+}
+
+// api/content/question_group/repository.go
+package questiongroup
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+	questionfeed "github.com/MathGaps/learning/v2/api/content/question_feed"
+	"github.com/MathGaps/learning/v2/api/content/skill"
+)
+
+type Repository interface {
+	repository.CRUDRepository[QuestionGroup]
+	AddSkillToQuestionGroup(ctx context.Context, questionGroupCoversSkillEdge edges.QuestionGroupCoversSkillEdge) (*edges.QuestionGroupCoversSkillEdge, error)
+	RemoveSkillFromQuestionGroup(ctx context.Context, questionGroupID, skillID id.ID) (*edge.Edge, error)
+	AddQuestionToQuestionGroup(ctx context.Context, questionGroupContainsQuestionEdge edges.QuestionGroupContainsQuestionEdge) (*edges.QuestionGroupContainsQuestionEdge, error)
+	RemoveQuestionFromQuestionGroup(ctx context.Context, questionGroupID, questionID id.ID) (*edge.Edge, error)
+	AddChallengeSkillToQuestionGroup(ctx context.Context, questionGroupChallengesSkillEdge edges.QuestionGroupChallengesSkillEdge) (*edges.QuestionGroupChallengesSkillEdge, error)
+	RemoveChallengeSkillFromQuestionGroup(ctx context.Context, questionGroupID, skillID id.ID) (*edge.Edge, error)
+	SkillsOfQuestionGroup(ctx context.Context, questionGroupID id.ID) ([]*skill.Skill, error)
+	GetChallengeSkills(ctx context.Context, questionGroupID id.ID, options *edge.GetAllEdgeOptions) ([]*skill.Skill, error)
+	GetAllQuestionGroupsOfSkill(ctx context.Context, skillID id.ID, options *edge.GetAllEdgeOptions) ([]*QuestionGroup, error)
+	AddComment(ctx context.Context, input CreateQuestionGroupCommentInput) (*edges.UserCommentedOnQuestionGroupEdge, error)
+	UpdateComment(ctx context.Context, input UpdateQuestionGroupCommentInput) (*edges.UserCommentedOnQuestionGroupEdge, error)
+	UpdateCommentState(ctx context.Context, commentID, questionGroupID id.ID, state edges.CommentState) (*edges.UserCommentedOnQuestionGroupEdge, error)
+	DeleteComment(ctx context.Context, input DeleteQuestionGroupCommentInput) (*edge.Edge, error)
+	GetComments(ctx context.Context, questionGroupID id.ID) ([]*edges.UserCommentedOnQuestionGroupEdge, error)
+	UpdateQuestionGroupOrder(ctx context.Context, skillID, questionGroupID id.ID, order int) ([]id.ID, error)
+	GetQuestionGroupState(ctx context.Context, questionGroupID id.ID) ([]questionfeed.QuestionFeedState, error)
+	GetQuestionGroupsLinkedToSkill(ctx context.Context, skillID id.ID, input QuestionGroupsLinkedToSkillInput) ([]*QuestionGroup, error)
+	GetQuestionGroupsStates(ctx context.Context, ids []id.ID) ([][]questionfeed.QuestionFeedState, error)
+	ResetQuestionGroupState(ctx context.Context, questionGroupID string) error
+}
+
+// api/content/question_type/entity.go
+package questiontype
+
+type QuestionType string
+
+const (
+	// Deprecated: All current question types will be migrated to "FLUENCY"
+	// TODO:(@hemanta212) Remove these two types after migration
+	QuestionTypePractice QuestionType = "PRACTICE"
+	QuestionTypeTest     QuestionType = "TEST"
+
+	QuestionTypeReasoning   QuestionType = "REASONING"
+	QuestionTypeConceptual  QuestionType = "CONCEPTUAL"
+	QuestionTypeFluency     QuestionType = "FLUENCY"
+	QuestionTypeBrainTeaser QuestionType = "BRAIN_TEASER"
+)
+
+var AllQuestionTypes = []QuestionType{
+	QuestionTypeReasoning,
+	QuestionTypeConceptual,
+	QuestionTypeFluency,
+	QuestionTypeBrainTeaser,
+}
+
+// api/content/region/entity.go
+package region
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+)
+
+type Region struct {
+	node.Node       `neo4j:"Region,id:region"`
+	Title           string `json:"title"`
+	DefaultTimeZone string `json:"defaultTimeZone"`
+	WWCC            string `json:"wwcc"`
+	OffersTutoring  bool   `json:"offersTutoring"`
+}
+
+type SchoolHolidays struct {
+	node.Node `neo4j:"SchoolHolidays,id:school_holidays"`
+	Start     time.Time `json:"start"`
+	End       time.Time `json:"end"`
+}
+
+type QualifyYearTitleInput struct {
+	RegionID id.ID   `json:"regionID"`
+	YearID   id.ID   `json:"yearID"`
+	Title    *string `json:"title"`
+}
+
+type RegionFilters struct {
+	OffersTutoring *bool `json:"offersTutoring"`
+}
+
+// api/content/region/repository.go
+package region
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/pagination"
+	"github.com/MathGaps/core/pkg/domain/types"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+)
+
+type Repository interface {
+	repository.CRUDRepository[Region]
+	CreateRegion(ctx context.Context, input func(*Region), schoolHolidays []types.TimeRange) (*Region, error)
+	UpdateRegion(ctx context.Context, regionID id.ID, input func(*Region), schoolHolidays []types.TimeRange) (*Region, error)
+	QualifyYearTitle(ctx context.Context, input QualifyYearTitleInput) (*edges.RegionOverridesYearEdge, error)
+	QualifiedYearTitle(ctx context.Context, regionID, yearID id.ID) (string, error)
+	GetYearsLinkedToRegion(ctx context.Context, regionID id.ID, options *edge.GetAllEdgeOptions) ([]*edges.RegionOverridesYearEdge, error)
+	GetSchoolHolidays(ctx context.Context, regionID id.ID, options *edge.GetAllEdgeOptions) ([]*SchoolHolidays, error)
+	AllRegions(ctx context.Context, regionFilters *RegionFilters, options *pagination.GetAllOptions) ([]*Region, error)
+}
+
+// api/content/skill/entity.go
+package skill
+
+import (
+	"fmt"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+
+	questionfeed "github.com/MathGaps/learning/v2/api/content/question_feed"
+	skillfilters "github.com/MathGaps/learning/v2/api/content/skill/skill_filters"
+)
+
+type SkillStage string
+
+const (
+	CHECKED           SkillStage = "CHECKED"
+	REQUIRES_CHECKING SkillStage = "REQUIRES_CHECKING"
+	NO_DESCRIPTION    SkillStage = "NO_DESCRIPTION"
+	OTHER_PROBLEMS    SkillStage = "OTHER_PROBLEMS"
+
+	QDRANT_COLLECTION          = "skills"
+	SEARCH_EMBEDDING_MODEL     = "text-embedding-3-small"
+	SIMILARITY_EMBEDDING_MODEL = "text-embedding-3-small"
+	SEARCH_VECTOR              = "search"
+	SIMILARITY_VECTOR          = "similarity"
+)
+
+type Skill struct {
+	node.Node        `neo4j:"Skill,id:skill"`
+	Title            string  `json:"title"`
+	Reference        string  `json:"reference"`
+	Description      string  `json:"description"`
+	Priority         int     `json:"priority" neo4j:"optional"`
+	Archived         bool    `json:"archived" neo4j:"optional"`
+	NeedsRegrouping  bool    `json:"needsRegrouping"`
+	EmbeddedResource *string `json:"embeddedResource" neo4j:"optional"`
+	// Checks is the number of times admin users have confirmed updates on this Skill.
+	Checks          int    `json:"checks"`
+	SuccessCriteria string `json:"successCriteria" neo4j:"optional"`
+
+	Index int `json:"index" neo4j:"optional"`
+}
+
+func (s Skill) String() string {
+	return fmt.Sprintf("%s: %s", s.Reference, s.Title)
+}
+
+type SkillConfirmation struct {
+	Title              int `json:"title"`
+	Description        int `json:"description"`
+	TitleGrammar       int `json:"titleGrammar"`
+	DescriptionGrammar int `json:"descriptionGrammar"`
+}
+
+type SkillConfirmationInput struct {
+	Title              *bool `json:"title"`
+	Description        *bool `json:"description"`
+	TitleGrammar       *bool `json:"titleGrammar"`
+	DescriptionGrammar *bool `json:"descriptionGrammar"`
+}
+
+func (s SkillConfirmation) HasError() bool {
+	return s.Title < 0 || s.Description < 0 || s.TitleGrammar < 0 || s.DescriptionGrammar < 0
+}
+
+type SkillFilters struct {
+	Subtopics          []id.ID                          `json:"subtopics"`
+	Networks           []id.ID                          `json:"networks"`
+	Writers            []id.ID                          `json:"writers"`
+	Reviewers          []id.ID                          `json:"reviewers"`
+	QuestionTypeFilter *skillfilters.QuestionTypeFilter `json:"questionTypeFilter"`
+	ShownInApp         *bool                            `json:"shownInApp"`
+	States             []questionfeed.QuestionFeedState `json:"states"`
+	Stage              *SkillStage                      `json:"stage"`
+}
+
+type SkillResult string
+
+const (
+	Gap      SkillResult = "GAP"
+	Unknown  SkillResult = "UNKNOWN"
+	Learnt   SkillResult = "LEARNT"
+	Mastered SkillResult = "MASTERED"
+)
+
+type SkillHeaderState string
+
+const (
+	Current      SkillHeaderState = "CURRENT"
+	Future       SkillHeaderState = "FUTURE"
+	Past         SkillHeaderState = "PAST"
+	Prerequisite SkillHeaderState = "PREREQUISITE"
+)
+
+type UpdateSkillInput struct {
+	Title           *string `json:"title,omitempty"`
+	Reference       *string `json:"reference,omitempty"`
+	Description     *string `json:"description,omitempty"`
+	Checks          *int    `json:"checks,omitempty"`
+	Priority        *int    `json:"priority,omitempty"`
+	NeedsRegrouping *bool   `json:"needsRegrouping,omitempty"`
+}
+
+// api/content/skill/helpers.go
+package skill
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+)
+
+func CollectConfirmsEdges(confirmations []*edges.UserConfirmsSkillEdge) SkillConfirmation {
+	confirmation := SkillConfirmation{}
+	for _, edge := range confirmations {
+		confirmation.Title += edge.Title
+		confirmation.Description += edge.Description
+		confirmation.TitleGrammar += edge.TitleGrammar
+		confirmation.DescriptionGrammar += edge.DescriptionGrammar
+	}
+	return confirmation
+}
+
+func InputToConfirmationEdge(userID, skillID id.ID, input SkillConfirmationInput) edges.UserConfirmsSkillEdge {
+	toInt := func(b *bool) int {
+		if b == nil {
+			return 0
+		} else if *b {
+			return 1
+		} else {
+			return -1
+		}
+	}
+	return edges.UserConfirmsSkillEdge{
+		Edge:               edge.Edge{FromID: userID, ToID: skillID},
+		Title:              toInt(input.Title),
+		Description:        toInt(input.Description),
+		TitleGrammar:       toInt(input.TitleGrammar),
+		DescriptionGrammar: toInt(input.DescriptionGrammar),
+	}
+}
+
+// api/content/skill/helpers_test.go
+package skill_test
+
+import (
+	"testing"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/stretchr/testify/assert"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+	"github.com/MathGaps/learning/v2/api/content/skill"
+)
+
+func TestEdgeToConfirmation(t *testing.T) {
+	assert := assert.New(t)
+	tbls := []struct {
+		confirmations []*edges.UserConfirmsSkillEdge
+		expected      skill.SkillConfirmation
+	}{
+		{
+			[]*edges.UserConfirmsSkillEdge{
+				{Title: 1, Description: 1, TitleGrammar: 1, DescriptionGrammar: 1},
+				{Title: 1, Description: 1, TitleGrammar: 1, DescriptionGrammar: 1},
+				{Title: 1, Description: 1, TitleGrammar: 1, DescriptionGrammar: 1},
+			},
+			skill.SkillConfirmation{
+				Title:              3,
+				Description:        3,
+				TitleGrammar:       3,
+				DescriptionGrammar: 3,
+			},
+		},
+		{
+			[]*edges.UserConfirmsSkillEdge{
+				{Title: -1, Description: 0, TitleGrammar: 0, DescriptionGrammar: 0},
+				{Title: 1, Description: 0, TitleGrammar: 0, DescriptionGrammar: 0},
+				{Title: -1, Description: -1, TitleGrammar: 0, DescriptionGrammar: 0},
+			},
+			skill.SkillConfirmation{
+				Title:              -1,
+				Description:        -1,
+				TitleGrammar:       0,
+				DescriptionGrammar: 0,
+			},
+		},
+	}
+
+	for _, tbl := range tbls {
+		assert.Equal(skill.CollectConfirmsEdges(tbl.confirmations), tbl.expected)
+	}
+}
+
+func TestInputToConfirmationEdge(t *testing.T) {
+	assert := assert.New(t)
+
+	trueVal := true
+	falseVal := false
+	edge := edge.Edge{FromID: id.ID("userID"), ToID: id.ID("skillID")}
+
+	tbls := []struct {
+		input    skill.SkillConfirmationInput
+		expected edges.UserConfirmsSkillEdge
+	}{
+		{
+			skill.SkillConfirmationInput{
+				Title:              &trueVal,
+				Description:        &trueVal,
+				TitleGrammar:       &trueVal,
+				DescriptionGrammar: &trueVal,
+			},
+			edges.UserConfirmsSkillEdge{
+				Edge:               edge,
+				Title:              1,
+				Description:        1,
+				TitleGrammar:       1,
+				DescriptionGrammar: 1,
+			},
+		},
+		{
+			skill.SkillConfirmationInput{
+				Title:              &falseVal,
+				Description:        &falseVal,
+				TitleGrammar:       &falseVal,
+				DescriptionGrammar: &falseVal,
+			},
+			edges.UserConfirmsSkillEdge{
+				Edge:               edge,
+				Title:              -1,
+				Description:        -1,
+				TitleGrammar:       -1,
+				DescriptionGrammar: -1,
+			},
+		},
+		{
+			skill.SkillConfirmationInput{},
+			edges.UserConfirmsSkillEdge{Edge: edge},
+		},
+		{
+			skill.SkillConfirmationInput{
+				Title:       &trueVal,
+				Description: &falseVal,
+			},
+			edges.UserConfirmsSkillEdge{
+				Edge:               edge,
+				Title:              1,
+				Description:        -1,
+				TitleGrammar:       0,
+				DescriptionGrammar: 0,
+			},
+		},
+	}
+
+	for _, tbl := range tbls {
+		assert.Equal(skill.InputToConfirmationEdge(edge.FromID, edge.ToID, tbl.input), tbl.expected)
+	}
+}
+
+func TestError(t *testing.T) {
+	assert := assert.New(t)
+	tbls := []struct {
+		confirmation skill.SkillConfirmation
+		expected     bool
+	}{
+		{skill.SkillConfirmation{Title: 3, Description: 3, TitleGrammar: 3, DescriptionGrammar: 3}, false},
+		{skill.SkillConfirmation{Title: 2, Description: 2, TitleGrammar: 1, DescriptionGrammar: 3}, false},
+		{skill.SkillConfirmation{Title: 3, Description: 3, TitleGrammar: -1, DescriptionGrammar: 3}, true},
+		{skill.SkillConfirmation{Title: -1, Description: 2, TitleGrammar: 1, DescriptionGrammar: 3}, true},
+	}
+
+	for _, tbl := range tbls {
+		assert.Equal(tbl.confirmation.HasError(), tbl.expected)
+	}
+}
+
+// api/content/skill/repository.go
+package skill
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/pagination"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+	"github.com/qdrant/go-client/qdrant"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+	"github.com/MathGaps/learning/v2/api/content/network"
+	questionfeed "github.com/MathGaps/learning/v2/api/content/question_feed"
+	skillfilters "github.com/MathGaps/learning/v2/api/content/skill/skill_filters"
+)
+
+type Repository interface {
+	repository.CRUDRepository[Skill]
+	GetSkill(ctx context.Context, id id.ID) (*Skill, error)
+	CreateSkill(ctx context.Context, input CreateSkillInput) (*Skill, error)
+	UpdateSkill(ctx context.Context, id string, input UpdateSkillInput) (*Skill, error)
+	Archive(ctx context.Context, id string) (string, error)
+	CreateSkillEdge(ctx context.Context, parentSkillEdge edges.ParentSkillEdge) (*edges.ParentSkillEdge, error)
+	DeleteSkillEdge(ctx context.Context, from, to id.ID) (*edges.ParentSkillEdge, error)
+	GetBaseSkillsOfSubtopic(ctx context.Context, subtopicID id.ID) ([]*Skill, error)
+	GetPrerequisiteSkillsOfSubtopic(ctx context.Context, subtopicID id.ID, included bool) ([]*Skill, error)
+	AddConfirmation(ctx context.Context, skillID id.ID, input SkillConfirmationInput) (*SkillConfirmation, error)
+	GetConfirmation(ctx context.Context, skillID id.ID, options *edge.GetAllEdgeOptions) (*SkillConfirmation, error)
+	SkillsTaughtInNetwork(ctx context.Context, networkID, curriculumID id.ID) ([]*Skill, error)
+	SkillsIncludedInNetwork(ctx context.Context, networkID id.ID, curriculumID, topicID, subtopicID *id.ID) ([]*IncludedSkillData, error)
+	GetAllPrerequisiteSkillsOfNetwork(ctx context.Context, networkID id.ID, options *edge.GetAllEdgeOptions) ([]*Skill, error)
+	GetParentSkills(ctx context.Context, skillID id.ID, options *edge.GetAllEdgeOptions) ([]*Skill, error)
+	GetChildSkills(ctx context.Context, skillID id.ID, options *edge.GetAllEdgeOptions) ([]*Skill, error)
+	NetworksTeachingSkill(ctx context.Context, skillID id.ID, curriculumID *id.ID, options *edge.GetAllEdgeOptions) ([]*network.Network, error)
+	GetAllChildSkills(ctx context.Context, skillID id.ID, depth *int, options *pagination.GetAllOptions) ([]*Skill, error)
+	GetAllParentSkills(ctx context.Context, skillID id.ID, depth *int, options *pagination.GetAllOptions) ([]*Skill, error)
+	SkillsWhere(ctx context.Context, filters *SkillFilters, sortBy *skillfilters.SortSkillBy, options *pagination.PaginationOptions) (*pagination.Connection[Skill], error)
+	GetSkillStates(ctx context.Context, skillID id.ID) ([]questionfeed.QuestionFeedState, error)
+	AllWriters(ctx context.Context) ([]id.ID, error)
+	AllConfirmers(ctx context.Context) ([]id.ID, error)
+	SkillStage(ctx context.Context, skillID id.ID) (SkillStage, error)
+	ShownInApp(ctx context.Context, skillID id.ID) (bool, error)
+	GetSkillConfirmation(ctx context.Context, skillID id.ID) (*SkillConfirmation, error)
+	GetOmega(ctx context.Context) (map[id.ID][]id.ID, error)
+	GetSkillsStates(ctx context.Context, ids []id.ID) ([][]questionfeed.QuestionFeedState, error)
+	SkillsLinkedToElaboration(ctx context.Context, elaborationID id.ID) ([]*Skill, error)
+	GetUsersForSkill(ctx context.Context, skillId id.ID, userIDs []string) ([]string, error)
+	GetQuestionDiagnosedSkills(ctx context.Context, questionID id.ID) ([]*Skill, error)
+	SearchSkills(ctx context.Context, query string, filters *SearchSkillsFilters, options OffsetPaginationOptions, scoreThreshold float64) ([]*Skill, error)
+	// SearchSimilarSkills finds closest skills to the given list of skill titles
+	// averages vectors of the titles and performs a similarity vector search
+	SearchSimilarSkills(ctx context.Context, titles []string, filters *SearchSkillsFilters, options OffsetPaginationOptions, scoreThreshold float64) ([]*SearchSkillsResult, error)
+}
+
+type IncludedSkillData struct {
+	TopicID        id.ID `json:"topicID"`
+	SubtopicID     id.ID `json:"subtopicID"`
+	CurriculumID   id.ID `json:"curriculumID"`
+	Skill          Skill `json:"skill"`
+	IsPrerequisite bool  `json:"isPrerequisite"`
+}
+
+type CreateSkillInput struct {
+	Title           string  `json:"title"`
+	Reference       string  `json:"reference"`
+	Description     *string `json:"description,omitempty"`
+	Checks          int     `json:"checks"`
+	Priority        *int    `json:"priority,omitempty"`
+	NeedsRegrouping bool    `json:"needsRegrouping"`
+}
+
+type SearchSkillsFilters struct {
+	SubtopicID          *string `json:"subtopicID"`
+	TopicID             *string `json:"topicID"`
+	CurriculumID        *string `json:"curriculumID"`
+	NetworkID           *string `json:"networkID"`
+	HasNotesAndExamples *bool   `json:"hasNotesAndExamples"`
+	IsPTo10             *bool   `json:"isPTo10"`
+}
+
+type SearchSkillsResult struct {
+	Skill *Skill  `json:"skill"`
+	Score float32 `json:"score"`
+}
+
+func (f SearchSkillsFilters) AsQdrantFilter() *qdrant.Filter {
+	conditions := []*qdrant.Condition{}
+
+	if f.SubtopicID != nil {
+		conditions = append(conditions, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "subtopics",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Keyword{
+							Keyword: *f.SubtopicID,
+						},
+					},
+				},
+			},
+		})
+	}
+
+	if f.TopicID != nil {
+		conditions = append(conditions, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "topics",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Keyword{
+							Keyword: *f.TopicID,
+						},
+					},
+				},
+			},
+		})
+	}
+
+	if f.CurriculumID != nil {
+		conditions = append(conditions, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "curriculums",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Keyword{
+							Keyword: *f.CurriculumID,
+						},
+					},
+				},
+			},
+		})
+	}
+
+	if f.NetworkID != nil {
+		conditions = append(conditions, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "networks",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Keyword{
+							Keyword: *f.NetworkID,
+						},
+					},
+				},
+			},
+		})
+	}
+
+	if f.HasNotesAndExamples != nil {
+		conditions = append(conditions, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "hasNotesAndExamples",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Boolean{
+							Boolean: *f.HasNotesAndExamples,
+						},
+					},
+				},
+			},
+		})
+	}
+
+	if f.IsPTo10 != nil {
+		conditions = append(conditions, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "isPTo10",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Boolean{
+							Boolean: *f.IsPTo10,
+						},
+					},
+				},
+			},
+		})
+	}
+
+	return &qdrant.Filter{Must: conditions}
+}
+
+type OffsetPaginationOptions struct {
+	Offset int `json:"offset"`
+	Limit  int `json:"limit"`
+}
+
+// api/content/skill/skill_filters/states.go
+package skillfilters
+
+type QuestionTypeFilter string
+
+const (
+	OnlyTest     QuestionTypeFilter = "ONLY_TEST"
+	OnlyPractice QuestionTypeFilter = "ONLY_PRACTICE"
+	HasTest      QuestionTypeFilter = "HAS_TEST"
+	HasPractice  QuestionTypeFilter = "HAS_PRACTICE"
+)
+
+type SortSkillBy string
+
+const (
+	MostQuestions   SortSkillBy = "MOST_QUESTIONS"
+	LeastQuestions  SortSkillBy = "LEAST_QUESTIONS"
+	LastModifiedAt  SortSkillBy = "LAST_MODIFIED_AT"
+	HighestPriority SortSkillBy = "HIGHEST_PRIORITY"
+	LowestPriority  SortSkillBy = "LOWEST_PRIORITY"
+)
+
+// api/content/stream/entity.go
+package stream
+
+import (
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+)
+
+type Stream struct {
+	node.Node `neo4j:"Stream,id:stream"`
+	Title     string `json:"title"`
+}
+
+// api/content/stream/repository.go
+package stream
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+)
+
+type Repository interface {
+	repository.CRUDRepository[Stream]
+	CreateStream(ctx context.Context, courseID id.ID, input *Stream) (*Stream, *edges.CourseContainsStreamEdge, error)
+	AllStreams(ctx context.Context, courseID id.ID, options *edge.GetAllEdgeOptions) ([]*Stream, error)
+}
+
+// api/content/subject/entity.go
+package subject
+
+import (
+	"time"
+
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+)
+
+type SubjectType string
+
+const (
+	Standard  SubjectType = "STANDARD"
+	Temporary SubjectType = "TEMPORARY"
+	Custom    SubjectType = "CUSTOM"
+)
+
+type Subject struct {
+	node.Node       `neo4j:"Subject,id:subject"`
+	Title           string      `json:"title"`
+	IconURL         string      `json:"iconURL"`
+	BackgroundColor string      `json:"backgroundColor"`
+	ForegroundColor string      `json:"foregroundColor"`
+	Priority        int         `json:"priority"`
+	Type            SubjectType `json:"type"`
+	Start           *time.Time  `json:"start" neo4j:"optional"`
+	End             *time.Time  `json:"end" neo4j:"optional"`
+}
+
+// ContainsNetworkGroupEdge is a relationship type between a subject and a network group.
+// Users studying this subject may study any of the networks in any of the NetworkGroups connected
+// with this edge, that are available to them under the user's region.
+type ContainsNetworkGroupEdge struct {
+	edge.Edge
+}
+
+type SubjectFilters struct {
+	SubjectType *SubjectType
+}
+
+// api/content/subject/repository.go
+package subject
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/pagination"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+)
+
+type SubjectNetworkIDs struct {
+	Subject    Subject
+	NetworkIDs []id.ID
+}
+
+type Repository interface {
+	repository.CRUDRepository[Subject]
+	SubjectsWhere(ctx context.Context, subjectFilters *SubjectFilters, options *pagination.PaginationOptions) (*pagination.Connection[Subject], error)
+	AllSubjects(ctx context.Context, subjectFilters *SubjectFilters, options *pagination.GetAllOptions) ([]*Subject, error)
+	SubjectLinkedToNetworkGroup(ctx context.Context, networkGroupID id.ID) (*Subject, error)
+	LinkNetworkGroupToSubject(ctx context.Context, subjectProvidesNetworkGroupEdge edges.SubjectProvidesNetworkGroupEdge) (*edges.SubjectProvidesNetworkGroupEdge, error)
+	UnlinkNetworkGroupFromSubject(ctx context.Context, subjectID, networkGroupID id.ID) error
+	SubjectLinkedToNetwork(ctx context.Context, networkID id.ID) (*Subject, error)
+	SubjectsLinkedToCourse(ctx context.Context, courseID id.ID) ([]*Subject, error)
+	AllSubjectsLinkedToNetworks(ctx context.Context, networkIDs []id.ID) ([]*Subject, error)
+	AllSubjectNetworkIDs(ctx context.Context) ([]*SubjectNetworkIDs, error)
+}
+
+// api/content/subtopic/entity.go
+package subtopic
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+)
+
+type Subtopic struct {
+	node.Node          `neo4j:"Subtopic,id:subtopic"`
+	Title              string  `json:"title"`
+	Description        string  `json:"description"`
+	Teaching           bool    `json:"teaching"`
+	Archived           bool    `json:"archived" neo4j:"optional"`
+	ExtendingPrompts   *string `json:"extendingPrompts" neo4j:"optional"`
+	Icon               string  `json:"icon"`
+	PortraitCoverImage string  `json:"portraitCoverImage" neo4j:"optional"`
+	UUID               string  `json:"uuid" neo4j:"optional"`
+}
+
+type SubtopicData struct {
+	Subtopic
+	Skills []SkillData `json:"skills"`
+}
+
+type SkillData struct {
+	ID           id.ID `json:"id"`
+	Excluded     bool  `json:"excluded"`
+	Base         bool  `json:"base"`
+	Prerequisite bool  `json:"prerequisite"`
+}
+
+type SubtopicComment struct {
+	ID          id.ID  `json:"id"`
+	Comment     string `json:"comment"`
+	CommentedBy string `json:"commentedBy"`
+	CreatedAt   string `json:"createdAt"`
+}
+
+type TopicSubtopicSpanningGraph struct {
+	TopicSubtopicAdjMap map[id.ID][]id.ID `json:"topicSubtopicAdjMap"`
+	SubtopicSkillAdjMap map[id.ID][]id.ID `json:"subtopicSkillAdjMap"`
+}
+
+type SubtopicSearchOptions struct {
+	TopicID string `json:"topicID"`
+}
+
+// api/content/subtopic/repository.go
+package subtopic
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/pagination"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+	questiontype "github.com/MathGaps/learning/v2/api/content/question_type"
+)
+
+type Repository interface {
+	repository.CRUDRepository[Subtopic]
+	CreateSubtopic(ctx context.Context, data SubtopicData) (*Subtopic, error)
+	UpdateSubtopic(ctx context.Context, subtopicID id.ID, data SubtopicData) (*Subtopic, error)
+	Archive(ctx context.Context, subtopicID id.ID) (id.ID, error)
+	BaseSkillsCount(ctx context.Context, subtopicID id.ID) (int, error)
+	PrerequisiteSkillsCount(ctx context.Context, subtopicID id.ID) (int, error)
+	SubtopicsLinkedToSkill(ctx context.Context, skillID id.ID) ([]*Subtopic, error)
+	BaseSkillEdges(ctx context.Context, subtopicID id.ID, options *edge.GetAllEdgeOptions) ([]*edges.SubtopicBaseSkillEdge, error)
+	PrerequisiteSkillEdges(ctx context.Context, subtopicID id.ID, options *edge.GetAllEdgeOptions) ([]*edges.SubtopicPrerequisiteSkillEdge, error)
+	UpdateSubtopicOrder(ctx context.Context, topicID, subtopicID id.ID, order int) ([]id.ID, error)
+	SubtopicsSkillAppearedIn(ctx context.Context, skillID id.ID) ([]*Subtopic, error)
+	GetSubtopicsLinkedToTopic(ctx context.Context, topicID id.ID, options *edge.EdgePaginationOptions) (*pagination.Connection[pagination.NodeData[Subtopic, edges.TopicBaseSubtopicEdge]], error)
+	TotalQuestions(ctx context.Context, subtopicID id.ID, questionType *questiontype.QuestionType) (int, error)
+	TotalSkills(ctx context.Context, subtopicID id.ID) (int, error)
+	ComputeTopicSubtopicSkillSpanningGraph(ctx context.Context, skillIDs []id.ID) (*TopicSubtopicSpanningGraph, error)
+	SubtopicsForCurriculum(ctx context.Context, curriculumID, topicID, networkID id.ID) ([]*Subtopic, error)
+}
+
+// api/content/topic/entity.go
+package topic
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+	"github.com/rlch/neogo"
+)
+
+var (
+	_ BaseTopic = (*Strand)(nil)
+	_ BaseTopic = (*Topic)(nil)
+)
+
+type (
+	BaseTopic interface {
+		IsEntity()
+		IsBaseTopic()
+		Base() *BaseTopicNode
+		GetID() id.ID
+	}
+	BaseTopicNode struct {
+		node.Abstract `baseType:"BaseTopic"`
+		Title         string `json:"title"`
+		Color         string `json:"color"`
+		Emoji         string `json:"emoji"`
+		UUID          string `json:"uuid" neo4j:"optional"`
+	}
+	Strand struct {
+		node.Node `neo4j:"Strand,id:strand"`
+		BaseTopicNode
+	}
+	Topic struct {
+		node.Node `neo4j:"Topic,id:topic"`
+		BaseTopicNode
+		Description string `json:"description"`
+		Icon        string `json:"icon"`
+		Difficulty  int    `json:"difficulty"`
+	}
+)
+
+func (BaseTopicNode) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&Strand{},
+		&Topic{},
+	}
+}
+func (BaseTopicNode) IsBaseTopic() {}
+
+func (s Strand) GetID() id.ID { return s.ID }
+func (s Strand) Base() *BaseTopicNode {
+	return &s.BaseTopicNode
+}
+
+func (t Topic) GetID() id.ID { return t.ID }
+func (t Topic) Base() *BaseTopicNode {
+	return &t.BaseTopicNode
+}
+
+// api/content/topic/repository.go
+package topic
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/edges"
+	questiontype "github.com/MathGaps/learning/v2/api/content/question_type"
+)
+
+type Repository interface {
+	repository.CRUDRepository[Topic]
+
+	CreateTopic(ctx context.Context, input CreateTopicInput) (*Topic, error)
+	Archive(ctx context.Context, topicID id.ID) (id.ID, error)
+	GetBaseTopic(ctx context.Context, id id.ID) (BaseTopic, error)
+	GetStrand(ctx context.Context, id id.ID) (*Strand, error)
+	LinkSubtopic(ctx context.Context, topicBaseSubtopicEdge edges.TopicBaseSubtopicEdge) (*edges.TopicBaseSubtopicEdge, error)
+	UnlinkSubtopic(ctx context.Context, topicID, subtopicID id.ID) (*edge.Edge, error)
+	TopicsOfSubtopic(ctx context.Context, subtopicID id.ID) (_ []*Topic, err error)
+	TotalQuestions(ctx context.Context, topicID id.ID, questionType *questiontype.QuestionType) (int, error)
+	TotalSkills(ctx context.Context, topicID id.ID) (int, error)
+	TopicsInCurriculum(ctx context.Context, curriculumID, networkID id.ID) ([]BaseTopic, error)
+}
+
+type CreateTopicInput struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Color       string `json:"color"`
+	Icon        string `json:"icon"`
+	Difficulty  int    `json:"difficulty"`
+	Emoji       string `json:"emoji"`
+}
+
+// api/content/year/entity.go
+package year
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+)
+
+// Year describes a students year of attendance at school.
+type Year struct {
+	node.Node `neo4j:"Year,id:year"`
+	Title     string `json:"title"`
+	// CanStudyYearAbove denotes whether students in this year can study subjects in year-levels above.
+	CanStudyYearAbove bool `json:"canStudyYearAbove"`
+	Order             int  `json:"order"`
+}
+
+type NetworkYearInput struct {
+	CourseID  id.ID `json:"courseID"`
+	NetworkID id.ID `json:"networkID"`
+}
+
+// api/content/year/repository.go
+package year
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+)
+
+type Repository interface {
+	repository.CRUDRepository[Year]
+	YearsCoveringSkill(ctx context.Context, skillID id.ID, class bool) ([]*Year, error)
+	GetTopologicallySortedYears(ctx context.Context, regionID id.ID) ([]*Year, error)
+	GetYearsLinkedToNetworkIdentifiers(ctx context.Context, inputs []*NetworkYearInput) ([]*Year, error)
+	GetYearsForTopic(ctx context.Context, topicID id.ID, class bool) ([]*Year, error)
+	GetYearsForSubtopic(ctx context.Context, subtopicID id.ID, class bool) ([]*Year, error)
+	RefreshYearOrder(ctx context.Context) error
+	GetYearLinkedToNetwork(ctx context.Context, networkID id.ID) (*Year, error)
+	GetAvailableYearsForSubject(ctx context.Context, subjectID id.ID) ([]*Year, error)
+}
+

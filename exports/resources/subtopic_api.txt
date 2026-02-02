@@ -1,0 +1,52 @@
+// api/subtopic/entity.go
+package subtopic
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/rlch/neogo"
+)
+
+type Subtopic struct {
+	neogo.Node `neo4j:"Subtopic,id:subtopic"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	TopicID *id.ID `json:"topicID,omitempty" neo4j:"optional"`
+}
+
+func (Subtopic) IsEntity() {}
+
+type CurriculumMetadata struct {
+	CurriculumID id.ID               `json:"curriculumId"`
+	Contents     []CurriculumContent `json:"contents"`
+}
+
+type CurriculumContent struct {
+	ContentDescription string  `json:"contentDescription"`
+	Code               string  `json:"code"`
+	Skills             []id.ID `json:"skills"`
+	ReferenceURL       string  `json:"referenceUrl"`
+}
+
+// api/subtopic/repository.go
+package subtopic
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type Repository interface {
+	FilterSubtopics(ctx context.Context, inputs []FilterSubtopicsInput, withLessonPlan, indirect bool) (map[id.ID]map[id.ID][]id.ID, error)
+	IsSubtopicDiagnosedForClass(ctx context.Context, classID id.ID, subtopicID id.ID) (bool, error)
+	AreSubtopicsDiagnosedForClass(ctx context.Context, classID id.ID, subtopicIDs []id.ID) (map[id.ID]bool, error)
+}
+
+type FilterSubtopicsInput struct {
+	UserID      id.ID   `json:"userID"`
+	TopicID     id.ID   `json:"topicID"`
+	SubtopicIDs []id.ID `json:"subtopicIDs"`
+}
+

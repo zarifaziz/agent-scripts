@@ -1,0 +1,1081 @@
+// api/resource/diagnostic_test_session.go
+package resource
+
+import (
+	"math"
+	"math/rand/v2"
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/common"
+)
+
+type (
+	DiagnosticTestSessionStatus         string
+	DiagnosticTestSessionAssessmentType string
+)
+
+const (
+	DTSessionStatusCreated  DiagnosticTestSessionStatus = "CREATED"
+	DTSessionStatusStarted  DiagnosticTestSessionStatus = "STARTED"
+	DTSessionStatusPaused   DiagnosticTestSessionStatus = "PAUSED"
+	DTSessionStatusFinished DiagnosticTestSessionStatus = "FINISHED"
+
+	DTSessionDiagnosticAssessment DiagnosticTestSessionAssessmentType = "DIAGNOSTIC"
+	DTSessionReviewAssessment     DiagnosticTestSessionAssessmentType = "REVIEW"
+)
+
+type DiagnosticTestSession struct {
+	BaseResource `neo4j:"DiagnosticTestSession,id:dts"`
+	CreatedAt    time.Time `json:"createdAt"`
+	CreatedBy    id.ID     `json:"createdBy"`
+
+	DueDate             time.Time                           `json:"dueDate"`
+	StartedAt           time.Time                           `json:"startedAt"`
+	FinishedAt          time.Time                           `json:"finishedAt"`
+	Status              DiagnosticTestSessionStatus         `json:"status"`
+	InitialProgress     *common.SessionProgress             `json:"initialProgress"`
+	FinalProgress       *common.SessionProgress             `json:"finalProgress"`
+	LastPausedAt        time.Time                           `json:"lastPausedAt"`
+	TotalPausedDuration time.Duration                       `json:"totalPausedDuration"`
+	TimeTaken           time.Duration                       `json:"timeTaken"`
+	TimeSaved           time.Duration                       `json:"timeSaved"`
+	AssessmentType      DiagnosticTestSessionAssessmentType `json:"assessmentType"`
+
+	TopologyGenerated bool `json:"topologyGenerated" neo4j:"optional"`
+}
+
+func (dts *DiagnosticTestSession) ComputeTimeTaken() time.Duration {
+	return time.Duration(dts.FinishedAt.Sub(dts.StartedAt) - dts.TotalPausedDuration)
+}
+
+func (dts *DiagnosticTestSession) TimeElapsed() time.Duration {
+	if dts.Status == DTSessionStatusFinished {
+		return dts.TimeTaken
+	}
+	switch dts.Status {
+	case DTSessionStatusCreated:
+		return 0
+	case DTSessionStatusStarted:
+		return time.Duration(time.Since(dts.StartedAt) - dts.TotalPausedDuration)
+	case DTSessionStatusPaused:
+		return time.Duration(dts.LastPausedAt.Sub(dts.StartedAt) - dts.TotalPausedDuration)
+	case DTSessionStatusFinished:
+		return dts.TimeTaken
+	default:
+		return 0
+	}
+}
+
+func (dts *DiagnosticTestSession) ComputeTimeSaved(numSubtopics int) time.Duration {
+	// We don't have access to skills (without a gRPC call), so we make a rough estimate based off # subtopics.
+	randWithin := func(min, max float64) float64 {
+		return min + rand.Float64()*(max-min)
+	}
+	randMins := float64(numSubtopics) * randWithin(17, 25)
+	return time.Duration(math.Max(randMins, 20) * float64(time.Minute))
+}
+
+type DiagnosticTestSessionPreview struct {
+	DiagnosticTestSession
+
+	ClassID     id.ID   `json:"classID"`
+	TopicIDs    []id.ID `json:"topicIDs"`
+	SubtopicIDs []id.ID `json:"subtopicIDs"`
+	Path        string  `json:"path"`
+}
+
+func (dts *DiagnosticTestSessionPreview) GetPath() string { return dts.Path }
+
+// api/resource/document.go
+package resource
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/question"
+)
+
+type Document struct {
+	BaseResource `neo4j:"Document,id:doc"`
+	question.QuillDocumentNode
+	CreatedAt    time.Time    `json:"createdAt"`
+	DocumentType DocumentType `json:"documentType"`
+	UnitCount    *int         `json:"unitCount,omitempty" neo4j:"optional"`
+	CoverImage   *string      `json:"coverImage,omitempty"`
+}
+
+func (Document) IsEntity() {}
+
+type DocumentPreview struct {
+	Document
+	ClassID    id.ID   `json:"classID"`
+	Path       string  `json:"path"`
+	CoverImage *string `json:"coverImage,omitempty"`
+}
+
+func (d *DocumentPreview) GetPath() string { return d.Path }
+
+// CreateDocumentInput represents the input required to create a new document
+type CreateDocumentInput struct {
+	Title         *string      `json:"title,omitempty"`
+	QuillDocument string       `json:"quillDocument"`
+	SkillIDs      []id.ID      `json:"skillIDs,omitempty"`
+	DocumentType  DocumentType `json:"documentType"`
+	UnitCount     *int         `json:"unitCount,omitempty"`
+	FolderID      *id.ID       `json:"folderID,omitempty"`
+}
+
+// UpdateDocumentInput represents the input required to update a document
+type UpdateDocumentInput struct {
+	Title         *string `json:"title,omitempty"`
+	QuillDocument *string `json:"quillDocument,omitempty"`
+	SkillIDs      []id.ID `json:"skillIDs,omitempty"`
+	UnitCount     *int    `json:"unitCount,omitempty"`
+}
+
+// GenerateUnitPlanInput represents the input required to generate a unit plan
+type GenerateUnitPlanInput struct {
+	YearID       id.ID   `json:"yearID"`
+	SkillIDs     []id.ID `json:"skillIDs"`
+	DurationDays int     `json:"durationDays"`
+	Title        string  `json:"title"`
+	Context      string  `json:"context"`
+}
+
+// DocumentType represents the type of document to generate
+type DocumentType string
+
+const (
+	DocumentTypeUnitPlan               DocumentType = "UNIT_PLAN"
+	DocumentTypeActivityIdeas          DocumentType = "ACTIVITY_IDEAS"
+	DocumentTypeCustomDocument         DocumentType = "CUSTOM_DOCUMENT"
+	DocumentTypeIndividualLearningPlan DocumentType = "INDIVIDUAL_LEARNING_PLAN"
+	DocumentTypeVocabularyList         DocumentType = "VOCABULARY_LIST"
+	DocumentTypeReflectionQuestions    DocumentType = "REFLECTION_QUESTIONS"
+)
+
+// GenerateDocumentContentInput represents the input required to generate document content
+type GenerateDocumentContentInput struct {
+	DocumentType DocumentType `json:"documentType"`
+	YearID       *id.ID       `json:"yearID,omitempty"`
+	SkillIDs     []id.ID      `json:"skillIDs,omitempty"`
+	Title        string       `json:"title"`
+	Context      *string      `json:"context,omitempty"`
+
+	// type specific fields
+	DurationDays     *int    `json:"durationDays,omitempty"`     // For UNIT_PLAN
+	NumActivities    *int    `json:"numActivities,omitempty"`    // For ACTIVITY_IDEAS
+	Instructions     *string `json:"instructions,omitempty"`     // For CUSTOM_DOCUMENT
+	Description      *string `json:"description,omitempty"`      // For INDIVIDUAL_LEARNING_PLAN
+	ReviewPeriodDays *int    `json:"reviewPeriodDays,omitempty"` // For INDIVIDUAL_LEARNING_PLAN
+	VocabularyCount  *int    `json:"vocabularyCount,omitempty"`  // For VOCABULARY_LIST
+	QuestionCount    *int    `json:"questionCount,omitempty"`    // For REFLECTION_QUESTIONS
+}
+
+type EditDocumentInput struct {
+	UserInstructions string `json:"userInstructions"`
+	OriginalContent  string `json:"originalContent"`
+}
+
+type ChangeSkillsInput struct {
+	SkillIDs        []id.ID `json:"skillIDs"`
+	OriginalContent string  `json:"originalContent"`
+}
+
+type AdjustCountInput struct {
+	DocumentType    DocumentType `json:"documentType"`
+	OriginalContent string       `json:"originalContent"`
+	NewCount        int          `json:"newCount"`
+}
+
+type SliderAdjustmentInput struct {
+	DocumentType    DocumentType `json:"documentType"`
+	OriginalContent string       `json:"originalContent"`
+	Difficulty      int          `json:"difficulty"`
+	ReadingLevel    int          `json:"readingLevel"`
+	Length          int          `json:"length"`
+}
+
+type EditSpecificTextInput struct {
+	FullDocumentDeltaJSON string `json:"fullDocumentDeltaJson"`
+	SelectedDeltaJSON     string `json:"selectedDeltaJson"`
+	SelectionStart        int    `json:"selectionStart"`
+	SelectionEnd          int    `json:"selectionEnd"`
+	UserInstructions      string `json:"userInstructions"`
+}
+
+type EditSpecificTextOutput struct {
+	ReplacementDeltaJSON string `json:"replacementDeltaJson"`
+	ReplaceStart         int    `json:"replaceStart"`
+	ReplaceEnd           int    `json:"replaceEnd"`
+}
+
+// DocumentContentChunk represents a streaming chunk of document generation content
+type DocumentContentChunk struct {
+	Content    string  `json:"content"`
+	IsComplete bool    `json:"isComplete"`
+	Error      *string `json:"error,omitempty"`
+}
+
+var AvailableDocumentTypes = []DocumentType{
+	DocumentTypeUnitPlan,
+	DocumentTypeActivityIdeas,
+	DocumentTypeCustomDocument,
+	DocumentTypeIndividualLearningPlan,
+	DocumentTypeVocabularyList,
+	DocumentTypeReflectionQuestions,
+}
+
+// api/resource/lesson_plan.go
+package resource
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/samber/lo"
+)
+
+type (
+	LessonType        string
+	WorksheetPlanType string
+)
+
+const (
+	LessonTypeStandard      LessonType = "STANDARD"
+	LessonTypeCustom        LessonType = "CUSTOM"
+	LessonTypeCollaborative LessonType = "COLLABORATIVE"
+	LessonTypeRevision      LessonType = "REVISION"
+
+	WorksheetPlanTypeStandard    WorksheetPlanType = "STANDARD"
+	WorksheetPlanTypeMultiChoice WorksheetPlanType = "MULTICHOICE"
+	WorksheetPlanTypeProcedural  WorksheetPlanType = "PROCEDURAL"
+	WorksheetPlanTypeEnabling    WorksheetPlanType = "ENABLING"
+	WorksheetPlanTypeExtension   WorksheetPlanType = "EXTENSION"
+	WorksheetPlanTypeCustom      WorksheetPlanType = "CUSTOM"
+)
+
+type LessonPlan struct {
+	BaseResource `neo4j:"LessonPlan,id:lp"`
+	CreatedAt    time.Time `json:"createdAt"`
+
+	PortraitCoverImage  string     `json:"portraitCoverImage"`
+	CoverImageGenerated bool       `json:"coverImageGenerated"`
+	Context             *string    `json:"context,omitempty"`
+	Ready               bool       `json:"ready"`
+	LessonType          LessonType `json:"lessonType"`
+}
+
+type WorksheetPlan struct {
+	LessonPlan
+}
+
+type LessonPlanPreview struct {
+	LessonPlan
+	ContextIcon          *string `json:"contextIcon,omitempty"`
+	TopicID              id.ID   `json:"topicID"`
+	TopicIDs             []id.ID `json:"topicIDs"`
+	SubtopicID           id.ID   `json:"subtopicID"`
+	SubtopicIDs          []id.ID `json:"subtopicIDs"`
+	ClassID              id.ID   `json:"classID"`
+	LessonsCount         int     `json:"lessonsCount"`
+	Path                 string  `json:"path"`
+	IntroductionImageURL string  `json:"introductionImageURL"`
+}
+
+type WorksheetPlanPreview struct {
+	WorksheetPlan
+	TopicID           id.ID             `json:"topicID"`
+	TopicIDs          []id.ID           `json:"topicIDs"`
+	SubtopicID        id.ID             `json:"subtopicID"`
+	SubtopicIDs       []id.ID           `json:"subtopicIDs"`
+	ClassID           id.ID             `json:"classID"`
+	Path              string            `json:"path"`
+	WorksheetPlanType WorksheetPlanType `json:"worksheetPlanType"`
+}
+
+func (l *LessonPlanPreview) GetPath() string    { return l.Path }
+func (w *WorksheetPlanPreview) GetPath() string { return w.Path }
+
+var (
+	WroksheetPlanTypes = []WorksheetPlanType{
+		WorksheetPlanTypeStandard,
+		WorksheetPlanTypeMultiChoice,
+		WorksheetPlanTypeProcedural,
+		WorksheetPlanTypeEnabling,
+		WorksheetPlanTypeExtension,
+		WorksheetPlanTypeCustom,
+	}
+	IsEnablingOrExtensionWorksheet = func(t WorksheetPlanType) bool {
+		return lo.Contains([]WorksheetPlanType{
+			WorksheetPlanTypeEnabling,
+			WorksheetPlanTypeExtension,
+		}, t)
+	}
+)
+
+// api/resource/prompts.go
+package resource
+
+import (
+	"github.com/MathGaps/ai-tooling/api/llm"
+)
+
+// PromptConfiguration defines the configuration for AI-powered resource naming
+type PromptConfiguration struct {
+	SystemTemplate      string
+	PromptTemplate      string
+	BuildPromptValues   func(input GenerateResourceNameInput, skillTitles []string) (any, error)
+	Provider            llm.ProviderType
+	Model               string
+	MaxTokens           int32
+	MaxCompletionTokens int32
+	Temperature         float32
+	ReasoningEffort     string
+}
+
+// api/resource/repository.go
+package resource
+
+import (
+	"context"
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/common"
+	"github.com/qdrant/go-client/qdrant"
+	"github.com/samber/lo"
+	"github.com/samber/oops"
+)
+
+type Repository interface {
+	Get(ctx context.Context, id id.ID) (_ Resource, err error)
+	GetAll(ctx context.Context, classID *id.ID, resourceType *ResourceType) (_ []Resource, err error)
+	Search(ctx context.Context, filter *SearchResourcesFilter, options *common.SearchOffsetPaginationOptions) (_ []ResourcePreview, err error)
+	GetSharePermissions(ctx context.Context, resourceID id.ID) (_ *ResourceSharePermissions, err error)
+	UpdateVisibility(ctx context.Context, id id.ID, public bool) error
+	UpdateReplicability(ctx context.Context, id id.ID, replicable bool) error
+	ShareWithUser(ctx context.Context, id id.ID, userID id.ID) error
+	ImportResource(ctx context.Context, resourceID id.ID, isClass bool) (_ Resource, err error)
+	TransferResourceToClass(ctx context.Context, resourceID id.ID, idToken string) (_ Resource, err error)
+	GenerateResourceName(ctx context.Context, input GenerateResourceNameInput) (*GenerateResourceNameResponse, error)
+	GenerateFallbackName(ctx context.Context, skillIDs []id.ID, resourceType ResourceType) (*GenerateResourceNameResponse, error)
+	TuteroResources(ctx context.Context, yearID *id.ID, resourceType ResourceType, search *string) ([]ResourcePreview, error)
+	UpdateLastViewedAt(ctx context.Context, resourceID id.ID) error
+	GetResourceTypeByID(ctx context.Context, resourceID id.ID) (ResourceType, error)
+	GetResourceTypesByIDs(ctx context.Context, resourceIDs []id.ID) (map[id.ID]ResourceType, error)
+	UpsertResourcePreview(ctx context.Context, input UpsertResourcePreviewInput) error
+	DuplicateResource(ctx context.Context, resourceID id.ID, userID id.ID, folderID id.ID) (*DuplicatedResource, error)
+	BulkDuplicateResources(ctx context.Context, resourceIDs []id.ID, classIDs []id.ID, folderDetails *SelectedFolderDetails) (string, error)
+	BulkDeleteResources(ctx context.Context, resourceIDs []id.ID) (string, error)
+	SetupResourceFacts(ctx context.Context, input SetupResourceFactsInput) error
+}
+
+type SearchResourcesFilter struct {
+	ClassIDs       []id.ID
+	ResourceType   ResourceType `json:"resourceType"`
+	TopicID        id.ID        `json:"topicID"`
+	Search         string       `json:"search"`
+	Path           string       `json:"path"`
+	Recursive      bool         `json:"recursive"`
+	ScoreThreshold float64      `json:"scoreThreshold,omitempty"`
+}
+
+type ScrollResourcesFilter struct {
+	ClassIDs  []string `json:"classIDs"`
+	Path      string   `json:"path"`
+	Recursive bool     `json:"recursive,omitempty"`
+}
+
+type DuplicatedResource struct {
+	Resource        Resource
+	TopicIDs        []id.ID
+	SubtopicIDs     []id.ID
+	LessonPlanCount int
+}
+
+// SelectedFolderDetails encapsulates folder selection logic for resource duplication
+type SelectedFolderDetails struct {
+	FolderID        id.ID `json:"folderID"`        // The folder to duplicate into
+	SelectedClassID id.ID `json:"selectedClassID"` // Which class gets the folder
+}
+
+func (f *SearchResourcesFilter) ToQdrantFilter() *qdrant.Filter {
+	must := []*qdrant.Condition{}
+
+	if len(f.ClassIDs) > 0 {
+		must = append(must, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "classID",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Keywords{
+							Keywords: &qdrant.RepeatedStrings{
+								Strings: f.ClassIDs,
+							},
+						},
+					},
+				},
+			},
+		})
+	}
+
+	if f.ResourceType != "" {
+		must = append(must, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "resourceType",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Text{
+							Text: string(f.ResourceType),
+						},
+					},
+				},
+			},
+		})
+	}
+
+	if f.TopicID != "" {
+		must = append(must, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "topicIDs",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Keyword{
+							Keyword: string(f.TopicID),
+						},
+					},
+				},
+			},
+		})
+	}
+
+	if f.Path != "" {
+		path := common.EnsurePathFormat(f.Path)
+		if f.Recursive {
+			must = append(must, &qdrant.Condition{
+				ConditionOneOf: &qdrant.Condition_Field{
+					Field: &qdrant.FieldCondition{
+						Key: "path",
+						Match: &qdrant.Match{
+							MatchValue: &qdrant.Match_Text{
+								Text: path,
+							},
+						},
+					},
+				},
+			})
+		} else {
+			must = append(must, qdrant.NewMatch("path", path))
+		}
+	}
+
+	return &qdrant.Filter{Must: must}
+}
+
+func (f *ScrollResourcesFilter) ToQdrantFilter() *qdrant.Filter {
+	must := []*qdrant.Condition{}
+
+	if len(f.ClassIDs) > 0 {
+		must = append(must, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "classID",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Keywords{
+							Keywords: &qdrant.RepeatedStrings{
+								Strings: f.ClassIDs,
+							},
+						},
+					},
+				},
+			},
+		})
+	}
+
+	if f.Path != "" {
+		path := common.EnsurePathFormat(f.Path)
+		if f.Recursive {
+			must = append(must, &qdrant.Condition{
+				ConditionOneOf: &qdrant.Condition_Field{
+					Field: &qdrant.FieldCondition{
+						Key: "path",
+						Match: &qdrant.Match{
+							MatchValue: &qdrant.Match_Text{
+								Text: path,
+							},
+						},
+					},
+				},
+			})
+		} else {
+			must = append(must, qdrant.NewMatch("path", path))
+		}
+	}
+
+	return &qdrant.Filter{Must: must}
+}
+
+type GenerateResourceNameInput struct {
+	ResourceType       ResourceType   `json:"resourceType"`
+	SkillIDs           []id.ID        `json:"skillIDs"`
+	SubtopicID         *id.ID         `json:"subtopicID,omitempty"`
+	Context            *string        `json:"context,omitempty"`
+	AdditionalMetadata map[string]any `json:"additionalMetadata,omitempty"`
+}
+
+type GenerateResourceNameResponse struct {
+	GeneratedName string `json:"generatedName"`
+}
+
+// UpsertResourcePreviewInput represents the unified input for upserting resource previews
+type UpsertResourcePreviewInput struct {
+	UUID               string
+	ResourceType       ResourceType
+	ShouldCreatePoint  bool
+	WithLessonPlan     *WithLessonPlanInput
+	WithDiagnosticTest *WithDiagnosticTestInput
+	WithDocument       *WithDocumentInput
+	WithUpload         *WithUploadInput
+}
+
+// WithLessonPlanInput contains lesson plan specific data for preview upsert
+type WithLessonPlanInput struct {
+	ResourceID           id.ID
+	Name                 *string
+	Context              *string
+	ContextIcon          *string
+	PortraitCoverImage   *string
+	IntroductionImageURL *string
+	CoverImageGenerated  *bool
+	TopicID              *id.ID
+	TopicIDs             []id.ID
+	SubtopicID           *id.ID
+	SubtopicIDs          []id.ID
+	ClassID              *id.ID
+	LessonsCount         *int
+	CreatedAt            *time.Time
+	Path                 *string
+	LastViewedAt         *time.Time
+	LessonType           *LessonType
+	WorksheetPlanType    *WorksheetPlanType
+}
+
+// WithDiagnosticTestInput contains diagnostic test session specific data for preview upsert
+type WithDiagnosticTestInput struct {
+	ID             id.ID
+	Name           *string
+	Status         DiagnosticTestSessionStatus
+	AssessmentType DiagnosticTestSessionAssessmentType
+	DueDate        *time.Time
+	CreatedAt      *time.Time
+	StartedAt      *time.Time
+	TimeTaken      *time.Duration
+	TopicIDs       []id.ID
+	SubtopicIDs    []id.ID
+	ClassID        id.ID
+	Path           string
+	LastViewedAt   *time.Time
+}
+
+// WithDocumentInput contains document specific data for preview upsert
+type WithDocumentInput struct {
+	ResourceID   id.ID
+	Name         *string
+	ClassID      *id.ID
+	CreatedAt    *time.Time
+	Path         *string
+	LastViewedAt *time.Time
+	DocumentType *DocumentType
+	CoverImage   *string
+}
+
+// WithUploadInput contains upload specific data for preview upsert
+type WithUploadInput struct {
+	ResourceID   id.ID
+	Name         *string
+	ClassID      *id.ID
+	CreatedAt    *time.Time
+	Path         *string
+	LastViewedAt *time.Time
+	UploadType   *string
+	URL          *string
+	Thumbnail    *string
+	TopicIDs     []id.ID
+	SubtopicIDs  []id.ID
+}
+
+func (i UpsertResourcePreviewInput) QdrantPayload() (map[string]*qdrant.Value, error) {
+	if i.UUID == "" {
+		return nil, oops.New("UUID is required to upsert resource preview")
+	}
+	if i.ResourceType == "" {
+		return nil, oops.New("ResourceType is required to upsert resource preview")
+	}
+
+	payload := map[string]*qdrant.Value{}
+	payload["resourceType"] = qdrant.NewValueString(string(i.ResourceType))
+
+	switch i.ResourceType {
+	case ResourceTypeLessonPlan, ResourceTypeWorksheet:
+		if i.WithLessonPlan == nil {
+			return nil, oops.New("WithLessonPlan input is required for lesson plan preview")
+		}
+		return i.buildLessonPlanPayload(i.ResourceType, payload)
+	case ResourceTypeDiagnosticTestSession:
+		if i.WithDiagnosticTest == nil {
+			return nil, oops.New("WithDiagnosticTest input is required for diagnostic test session preview")
+		}
+		return i.buildDiagnosticTestPayload(payload)
+	case ResourceTypeDocument:
+		if i.WithDocument == nil {
+			return nil, oops.New("WithDocument input is required for document preview")
+		}
+		return i.buildDocumentPayload(payload)
+	case ResourceTypeUpload:
+		if i.WithUpload == nil {
+			return nil, oops.New("WithUpload input is required for upload preview")
+		}
+		return i.buildUploadPayload(payload)
+	default:
+		return nil, oops.New("unsupported resource type for preview upsert")
+	}
+}
+
+func (i UpsertResourcePreviewInput) buildLessonPlanPayload(resourceType ResourceType, basePayload map[string]*qdrant.Value) (map[string]*qdrant.Value, error) {
+	lp := i.WithLessonPlan
+
+	if lp.ResourceID != "" {
+		basePayload["id"] = qdrant.NewValueString(lp.ResourceID)
+	}
+	if lp.Name != nil && *lp.Name != "" {
+		basePayload["name"] = qdrant.NewValueString(*lp.Name)
+	}
+	if lp.Path != nil {
+		basePayload["path"] = qdrant.NewValueString(*lp.Path)
+	}
+	if lp.TopicID != nil && *lp.TopicID != "" {
+		basePayload["topicID"] = qdrant.NewValueString(*lp.TopicID)
+	}
+	if lp.SubtopicID != nil && *lp.SubtopicID != "" {
+		basePayload["subtopicID"] = qdrant.NewValueString(*lp.SubtopicID)
+	}
+	if lp.LessonsCount != nil {
+		basePayload["lessonsCount"] = qdrant.NewValueInt(int64(*lp.LessonsCount))
+	}
+	if lp.ClassID != nil {
+		basePayload["classID"] = qdrant.NewValueString(*lp.ClassID)
+	}
+	if lp.CreatedAt != nil {
+		basePayload["createdAt"] = qdrant.NewValueString(lp.CreatedAt.Format(time.RFC3339))
+	}
+	if lp.LastViewedAt != nil {
+		basePayload["lastViewedAt"] = qdrant.NewValueString(lp.LastViewedAt.Format(time.RFC3339))
+	}
+	if len(lp.TopicIDs) > 0 {
+		basePayload["topicIDs"] = qdrant.NewValueList(&qdrant.ListValue{
+			Values: lo.Map(lp.TopicIDs, func(id id.ID, _ int) *qdrant.Value {
+				return qdrant.NewValueString(id)
+			}),
+		})
+	}
+	if len(lp.SubtopicIDs) > 0 {
+		basePayload["subtopicIDs"] = qdrant.NewValueList(&qdrant.ListValue{
+			Values: lo.Map(lp.SubtopicIDs, func(id id.ID, _ int) *qdrant.Value {
+				return qdrant.NewValueString(id)
+			}),
+		})
+	}
+	if lp.PortraitCoverImage != nil && *lp.PortraitCoverImage != "" {
+		basePayload["portraitCoverImage"] = qdrant.NewValueString(*lp.PortraitCoverImage)
+	}
+	if lp.IntroductionImageURL != nil && *lp.IntroductionImageURL != "" {
+		basePayload["introductionImageURL"] = qdrant.NewValueString(*lp.IntroductionImageURL)
+	}
+	if lp.CoverImageGenerated != nil {
+		basePayload["coverImageGenerated"] = qdrant.NewValueBool(*lp.CoverImageGenerated)
+	}
+
+	// Lesson plan specific fields
+	if resourceType == ResourceTypeLessonPlan {
+		if lp.Context != nil {
+			basePayload["context"] = qdrant.NewValueString(*lp.Context)
+		}
+		if lp.ContextIcon != nil {
+			basePayload["contextIcon"] = qdrant.NewValueString(*lp.ContextIcon)
+		}
+		if lp.LessonType != nil {
+			basePayload["lessonType"] = qdrant.NewValueString(string(*lp.LessonType))
+		}
+	}
+
+	if resourceType == ResourceTypeWorksheet {
+		if lp.WorksheetPlanType != nil {
+			basePayload["worksheetPlanType"] = qdrant.NewValueString(string(*lp.WorksheetPlanType))
+		}
+	}
+
+	return basePayload, nil
+}
+
+func (i UpsertResourcePreviewInput) buildDiagnosticTestPayload(basePayload map[string]*qdrant.Value) (map[string]*qdrant.Value, error) {
+	dt := i.WithDiagnosticTest
+
+	if dt.ID != "" {
+		basePayload["id"] = qdrant.NewValueString(dt.ID)
+	}
+	if dt.Name != nil && *dt.Name != "" {
+		basePayload["name"] = qdrant.NewValueString(*dt.Name)
+	}
+	if dt.Path != "" {
+		basePayload["path"] = qdrant.NewValueString(dt.Path)
+	}
+	if dt.Status != "" {
+		basePayload["status"] = qdrant.NewValueString(string(dt.Status))
+	}
+	if dt.DueDate != nil {
+		basePayload["dueDate"] = qdrant.NewValueString(dt.DueDate.Format(time.RFC3339))
+	}
+	if dt.StartedAt != nil {
+		basePayload["startedAt"] = qdrant.NewValueString(dt.StartedAt.Format(time.RFC3339))
+	}
+	if dt.CreatedAt != nil {
+		basePayload["createdAt"] = qdrant.NewValueString(dt.CreatedAt.Format(time.RFC3339))
+	}
+	if dt.LastViewedAt != nil {
+		basePayload["lastViewedAt"] = qdrant.NewValueString(dt.LastViewedAt.Format(time.RFC3339))
+	}
+	if dt.TimeTaken != nil {
+		basePayload["timeTaken"] = qdrant.NewValueInt(int64(*dt.TimeTaken))
+	}
+	if dt.AssessmentType != "" {
+		basePayload["assessmentType"] = qdrant.NewValueString(string(dt.AssessmentType))
+	}
+	if dt.ClassID != "" {
+		basePayload["classID"] = qdrant.NewValueString(dt.ClassID)
+	}
+	if len(dt.TopicIDs) > 0 {
+		basePayload["topicIDs"] = qdrant.NewValueList(&qdrant.ListValue{
+			Values: lo.Map(dt.TopicIDs, func(id id.ID, _ int) *qdrant.Value {
+				return qdrant.NewValueString(id)
+			}),
+		})
+	}
+	if len(dt.SubtopicIDs) > 0 {
+		basePayload["subtopicIDs"] = qdrant.NewValueList(&qdrant.ListValue{
+			Values: lo.Map(dt.SubtopicIDs, func(id id.ID, _ int) *qdrant.Value {
+				return qdrant.NewValueString(id)
+			}),
+		})
+	}
+
+	return basePayload, nil
+}
+
+func (i UpsertResourcePreviewInput) buildDocumentPayload(basePayload map[string]*qdrant.Value) (map[string]*qdrant.Value, error) {
+	doc := i.WithDocument
+
+	if doc.ResourceID != "" {
+		basePayload["id"] = qdrant.NewValueString(doc.ResourceID)
+	}
+	if doc.Name != nil && *doc.Name != "" {
+		basePayload["name"] = qdrant.NewValueString(*doc.Name)
+	}
+	if doc.Path != nil {
+		basePayload["path"] = qdrant.NewValueString(*doc.Path)
+	}
+	if doc.ClassID != nil {
+		basePayload["classID"] = qdrant.NewValueString(*doc.ClassID)
+	}
+	if doc.CreatedAt != nil {
+		basePayload["createdAt"] = qdrant.NewValueString(doc.CreatedAt.Format(time.RFC3339))
+	}
+	if doc.LastViewedAt != nil {
+		basePayload["lastViewedAt"] = qdrant.NewValueString(doc.LastViewedAt.Format(time.RFC3339))
+	}
+	if doc.DocumentType != nil {
+		basePayload["documentType"] = qdrant.NewValueString(string(*doc.DocumentType))
+	}
+	if doc.CoverImage != nil {
+		basePayload["coverImage"] = qdrant.NewValueString(*doc.CoverImage)
+	}
+
+	return basePayload, nil
+}
+
+func (i UpsertResourcePreviewInput) buildUploadPayload(basePayload map[string]*qdrant.Value) (map[string]*qdrant.Value, error) {
+	u := i.WithUpload
+
+	if u.ResourceID != "" {
+		basePayload["id"] = qdrant.NewValueString(u.ResourceID)
+	}
+	if u.Name != nil && *u.Name != "" {
+		basePayload["name"] = qdrant.NewValueString(*u.Name)
+	}
+	if u.Path != nil {
+		basePayload["path"] = qdrant.NewValueString(*u.Path)
+	}
+	if u.ClassID != nil {
+		basePayload["classID"] = qdrant.NewValueString(*u.ClassID)
+	}
+	if u.CreatedAt != nil {
+		basePayload["createdAt"] = qdrant.NewValueString(u.CreatedAt.Format(time.RFC3339))
+	}
+	if u.LastViewedAt != nil {
+		basePayload["lastViewedAt"] = qdrant.NewValueString(u.LastViewedAt.Format(time.RFC3339))
+	}
+	if u.UploadType != nil {
+		basePayload["uploadType"] = qdrant.NewValueString(*u.UploadType)
+	}
+	if u.URL != nil {
+		basePayload["url"] = qdrant.NewValueString(*u.URL)
+	}
+	if u.Thumbnail != nil && *u.Thumbnail != "" {
+		basePayload["thumbnail"] = qdrant.NewValueString(*u.Thumbnail)
+	}
+	if len(u.TopicIDs) > 0 {
+		basePayload["topicIDs"] = qdrant.NewValueList(&qdrant.ListValue{
+			Values: lo.Map(u.TopicIDs, func(id id.ID, _ int) *qdrant.Value {
+				return qdrant.NewValueString(id)
+			}),
+		})
+	}
+	if len(u.SubtopicIDs) > 0 {
+		basePayload["subtopicIDs"] = qdrant.NewValueList(&qdrant.ListValue{
+			Values: lo.Map(u.SubtopicIDs, func(id id.ID, _ int) *qdrant.Value {
+				return qdrant.NewValueString(id)
+			}),
+		})
+	}
+
+	return basePayload, nil
+}
+
+type SetupResourceFactsInput struct {
+	UserID     id.ID `json:"userID"`
+	AuthUserID id.ID `json:"authUserID"`
+	ResourceID id.ID `json:"resourceID"`
+	IsClass    bool  `json:"isClass"`
+	IsPublic   bool  `json:"isPublic"`
+}
+
+// api/resource/resources.go
+package resource
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/rlch/neogo"
+)
+
+type Resource interface {
+	neogo.IAbstract
+
+	IsEntity()
+	IsResource()
+	GetName() string
+	GetResourceType() ResourceType
+	Base() *BaseResource
+}
+
+type ResourcePreview interface {
+	neogo.IAbstract
+
+	IsEntity()
+	IsResource()
+	GetName() string
+	GetResourceType() ResourceType
+	GetPath() string
+	Base() *BaseResource
+}
+
+type BaseResource struct {
+	neogo.Abstract `neo4j:"Resource"`
+	neogo.Node
+	Name         string       `json:"name"`
+	Type         ResourceType `json:"resourceType"`
+	UUID         string       `json:"uuid"`
+	LastViewedAt time.Time    `json:"lastViewedAt"`
+}
+
+func (r BaseResource) IsEntity()                     {}
+func (r BaseResource) IsResource()                   {}
+func (r BaseResource) GetName() string               { return r.Name }
+func (r BaseResource) GetResourceType() ResourceType { return r.Type }
+func (r *BaseResource) Base() *BaseResource          { return r }
+
+func (BaseResource) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&LessonPlan{},
+		&WorksheetPlan{},
+		&DiagnosticTestSession{},
+		&Document{},
+	}
+}
+
+type ResourceType string
+
+const (
+	ResourceTypeLessonPlan            ResourceType = "LESSON_PLAN"
+	ResourceTypeWorksheet             ResourceType = "WORKSHEET"
+	ResourceTypeDiagnosticTestSession ResourceType = "DIAGNOSTIC_TEST_SESSION"
+	ResourceTypeDocument              ResourceType = "DOCUMENT"
+	ResourceTypeUpload                ResourceType = "UPLOAD"
+)
+
+type ResourceSharePermissions struct {
+	OwnerID         id.ID        `json:"owneryID"`
+	IsCopyable      bool         `json:"isCopyable"`
+	IsPublic        bool         `json:"isPublic"`
+	IsOwner         bool         `json:"isOwner"`
+	CanRead         bool         `json:"canRead"`
+	SharedWithClass bool         `json:"sharedWithClass"`
+	ResourceType    ResourceType `json:"resourceType"`
+}
+
+// api/resource/upload_preview_test.go
+package resource_test
+
+import (
+	"testing"
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/resource"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestBuildUploadPayload(t *testing.T) {
+	t.Parallel()
+
+	t.Run("builds complete upload payload", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Now()
+		resourceID := id.MustNew()
+		classID := id.MustNew()
+		uploadType := "VIDEO"
+		name := "Test Video"
+		url := "https://youtube.com/watch?v=test"
+		thumbnail := "https://img.youtube.com/vi/test/default.jpg"
+		path := "~/folder1/"
+
+		input := resource.UpsertResourcePreviewInput{
+			UUID:              "test-uuid-1234",
+			ResourceType:      resource.ResourceTypeUpload,
+			ShouldCreatePoint: true,
+			WithUpload: &resource.WithUploadInput{
+				ResourceID:   resourceID,
+				Name:         &name,
+				ClassID:      &classID,
+				CreatedAt:    &now,
+				Path:         &path,
+				LastViewedAt: &now,
+				UploadType:   &uploadType,
+				URL:          &url,
+				Thumbnail:    &thumbnail,
+			},
+		}
+
+		payload, err := input.QdrantPayload()
+		require.NoError(t, err)
+
+		assert.Equal(t, string(resource.ResourceTypeUpload), payload["resourceType"].GetStringValue())
+		assert.Equal(t, string(resourceID), payload["id"].GetStringValue())
+		assert.Equal(t, name, payload["name"].GetStringValue())
+		assert.Equal(t, string(classID), payload["classID"].GetStringValue())
+		assert.Equal(t, path, payload["path"].GetStringValue())
+		assert.Equal(t, uploadType, payload["uploadType"].GetStringValue())
+		assert.Equal(t, url, payload["url"].GetStringValue())
+		assert.Equal(t, thumbnail, payload["thumbnail"].GetStringValue())
+		assert.NotEmpty(t, payload["createdAt"].GetStringValue())
+		assert.NotEmpty(t, payload["lastViewedAt"].GetStringValue())
+	})
+
+	t.Run("builds upload payload without optional thumbnail", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Now()
+		resourceID := id.MustNew()
+		classID := id.MustNew()
+		uploadType := "LINK"
+		name := "Test Link"
+		url := "https://example.com"
+		path := "~/"
+
+		input := resource.UpsertResourcePreviewInput{
+			UUID:              "test-uuid-5678",
+			ResourceType:      resource.ResourceTypeUpload,
+			ShouldCreatePoint: true,
+			WithUpload: &resource.WithUploadInput{
+				ResourceID:   resourceID,
+				Name:         &name,
+				ClassID:      &classID,
+				CreatedAt:    &now,
+				Path:         &path,
+				LastViewedAt: &now,
+				UploadType:   &uploadType,
+				URL:          &url,
+				Thumbnail:    nil,
+			},
+		}
+
+		payload, err := input.QdrantPayload()
+		require.NoError(t, err)
+
+		assert.Equal(t, uploadType, payload["uploadType"].GetStringValue())
+		assert.Equal(t, url, payload["url"].GetStringValue())
+		_, hasThumbnail := payload["thumbnail"]
+		assert.False(t, hasThumbnail, "thumbnail should not be present when nil")
+	})
+
+	t.Run("returns error when WithUpload is nil", func(t *testing.T) {
+		t.Parallel()
+
+		input := resource.UpsertResourcePreviewInput{
+			UUID:              "test-uuid-9999",
+			ResourceType:      resource.ResourceTypeUpload,
+			ShouldCreatePoint: true,
+			WithUpload:        nil,
+		}
+
+		_, err := input.QdrantPayload()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "WithUpload input is required for upload preview")
+	})
+
+	t.Run("returns error when UUID is empty", func(t *testing.T) {
+		t.Parallel()
+
+		input := resource.UpsertResourcePreviewInput{
+			UUID:              "",
+			ResourceType:      resource.ResourceTypeUpload,
+			ShouldCreatePoint: true,
+			WithUpload:        &resource.WithUploadInput{},
+		}
+
+		_, err := input.QdrantPayload()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "UUID is required")
+	})
+
+	t.Run("returns error when ResourceType is empty", func(t *testing.T) {
+		t.Parallel()
+
+		input := resource.UpsertResourcePreviewInput{
+			UUID:              "test-uuid",
+			ResourceType:      "",
+			ShouldCreatePoint: true,
+			WithUpload:        &resource.WithUploadInput{},
+		}
+
+		_, err := input.QdrantPayload()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ResourceType is required")
+	})
+}
+

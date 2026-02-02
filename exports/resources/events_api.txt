@@ -1,0 +1,522 @@
+// api/events/events.go
+package events
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	natstooling "github.com/MathGaps/nats-tooling"
+	diagnostictest "github.com/MathGaps/resources/api/diagnostic_test"
+	diagnostictestsession "github.com/MathGaps/resources/api/diagnostic_test_session"
+	lessonplan "github.com/MathGaps/resources/api/lesson_plan"
+	"github.com/MathGaps/resources/api/resource"
+)
+
+// Ensure all events implement natstooling.Event interface
+var (
+	_ natstooling.Event = (*DiagnosticTestSessionStatusUpdated)(nil)
+	_ natstooling.Event = (*DiagnosticTestSessionUpdated)(nil)
+	_ natstooling.Event = (*LessonPlanDocumentationUpdated)(nil)
+	_ natstooling.Event = (*LessonPlanNodeContextUpdated)(nil)
+	_ natstooling.Event = (*DiagnosticTestSessionProgressChanged)(nil)
+	_ natstooling.Event = (*DiagnosticTestSessionQuestionAnswered)(nil)
+	_ natstooling.Event = (*LessonPlanCoverImageRequest)(nil)
+	_ natstooling.Event = (*LessonPlanCoverImageGenerated)(nil)
+	_ natstooling.Event = (*ClassStudentsReadyForTest)(nil)
+	_ natstooling.Event = (*BulkResourceDuplicationStarted)(nil)
+	_ natstooling.Event = (*BulkResourceDuplicationCompleted)(nil)
+	_ natstooling.Event = (*BulkResourceDeletionStarted)(nil)
+	_ natstooling.Event = (*BulkResourceDeletionCompleted)(nil)
+	_ natstooling.Event = (*LessonReadyUpdated)(nil)
+	_ natstooling.Event = (*LessonPlanReadyUpdated)(nil)
+	_ natstooling.Event = (*LessonPlanUpdated)(nil)
+)
+
+// DiagnosticTestSessionUpdated represents the session after updating its properties
+type DiagnosticTestSessionUpdated struct {
+	SessionID id.ID `json:"id"`
+}
+
+// DiagnosticTestSessionStatusUpdated represents the diagnostic test session when the status changed
+type DiagnosticTestSessionStatusUpdated struct {
+	SessionID id.ID `json:"id"`
+}
+
+type DiagnosticTestSessionProgressChanged struct {
+	SessionID id.ID `json:"id"`
+}
+
+type DiagnosticTestSessionQuestionAnswered struct {
+	SessionID string `json:"id"`
+}
+
+type ActiveDiagnosticTestForStudentUpdated struct {
+	StudentID id.ID `json:"id"`
+}
+
+type ClassStudentsReadyForTest struct {
+	ClassID id.ID `json:"id"`
+}
+
+type StudentProgressesForSession struct {
+	SessionID  id.ID                                    `json:"sessionID"`
+	Progresses []*diagnostictestsession.StudentProgress `json:"progresses"`
+}
+
+func (s StudentProgressesForSession) IsEntity() {}
+
+type AnsweredQuestionsForSession struct {
+	SessionID         id.ID                                             `json:"sessionID"`
+	AnsweredQuestions []*diagnostictest.DiagnosticTestAnsweredQuestions `json:"answeredQuestions"`
+}
+
+func (a AnsweredQuestionsForSession) IsEntity() {}
+
+// BulkResourceDuplicationStarted represents the start of a bulk resource duplication operation
+type BulkResourceDuplicationStarted struct {
+	RequestID     string                          `json:"requestID"`
+	UserID        id.ID                           `json:"userID"`
+	ResourceIDs   []id.ID                         `json:"resourceIDs"`
+	ClassIDs      []id.ID                         `json:"classIDs"`
+	FolderDetails *resource.SelectedFolderDetails `json:"folderDetails,omitempty"`
+}
+
+func (a BulkResourceDuplicationStarted) IsEntity() {}
+
+// BulkResourceDuplicationCompleted represents the completion of a bulk resource duplication operation
+type BulkResourceDuplicationCompleted struct {
+	RequestID     string  `json:"requestID"`
+	OriginalIDs   []id.ID `json:"originalIDs"`
+	DuplicatedIDs []id.ID `json:"duplicatedIDs"`
+	FailedIDs     []id.ID `json:"failedIDs"`
+}
+
+func (b BulkResourceDuplicationCompleted) IsEntity() {}
+
+// BulkResourceDeletionStarted represents the start of a bulk resource deletion operation
+type BulkResourceDeletionStarted struct {
+	RequestID   string  `json:"requestID"`
+	UserID      id.ID   `json:"userID"`
+	ResourceIDs []id.ID `json:"resourceIDs"`
+}
+
+func (a BulkResourceDeletionStarted) IsEntity() {}
+
+// BulkResourceDeletionCompleted represents the completion of a bulk resource deletion operation
+type BulkResourceDeletionCompleted struct {
+	RequestID  string  `json:"requestID"`
+	DeletedIDs []id.ID `json:"deletedIDs"`
+	FailedIDs  []id.ID `json:"failedIDs"`
+}
+
+func (b BulkResourceDeletionCompleted) IsEntity() {}
+
+// LessonPlanDocumentationUpdated represents the lesson plan documentation node updated
+type LessonPlanDocumentationUpdated struct {
+	LessonPlanID id.ID  `json:"lessonPlanID"`
+	LessonID     id.ID  `json:"lessonID"`
+	NodeType     string `json:"nodeType"`
+}
+
+// LessonPlanNodeContextUpdated represents the context update for a lesson plan node
+type LessonPlanNodeContextUpdated struct {
+	LessonPlanID id.ID  `json:"lessonPlanID"`
+	NodeID       id.ID  `json:"nodeID"`
+	Context      string `json:"context"`
+}
+
+// TODO: Remove below types once teaching and diagnostics migrated to fx
+type TestQuestionAnswered struct {
+	TestID     id.ID  `json:"testID"`
+	StudentID  id.ID  `json:"studentID"`
+	Result     bool   `json:"result"`
+	QuestionID id.ID  `json:"questionID"`
+	Answer     string `json:"answer"`
+	TimeTaken  int64  `json:"timeTaken"`
+}
+
+type TestFinished struct {
+	TestID id.ID `json:"testID"`
+}
+
+type LessonPlanCoverImageRequest struct {
+	UserID       id.ID `json:"userID"`
+	LessonPlanID id.ID `json:"lessonPlanID"`
+	ClassID      id.ID `json:"classID"`
+	NodeID       id.ID `json:"nodeID"`
+}
+
+type LessonPlanCoverImageGenerated struct {
+	UserID       id.ID  `json:"userID"`
+	LessonPlanID id.ID  `json:"lessonPlanID"`
+	ImageUrl     string `json:"imageUrl"`
+}
+
+type LessonReadyUpdated struct {
+	LessonID     id.ID `json:"lessonID"`
+	LessonPlanID id.ID `json:"lessonPlanID"`
+}
+
+type LessonPlanReadyUpdated struct {
+	LessonPlanID id.ID `json:"lessonPlanID"`
+}
+
+type LessonPlanUpdated struct {
+	LessonPlanID id.ID                              `json:"lessonPlanID"`
+	UserID       id.ID                              `json:"userID"`
+	Input        lessonplan.UpdateLessonPlanInputV3 `json:"input"`
+	IsClass      bool                               `json:"isClass"`
+}
+
+// api/events/mixpanel.go
+package events
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/mixpanel"
+)
+
+type ResourceType string
+
+const (
+	LessonPlanType     ResourceType = "Lesson Plan"
+	WorksheetType      ResourceType = "Worksheet"
+	DiagnosticTestType ResourceType = "Assessment"
+)
+
+type ResourceEvent struct {
+	Year         string       `json:"year"`
+	SkillCount   int          `json:"skillCount"`
+	ClassName    string       `json:"class"`
+	ResourceType ResourceType `json:"type"`
+}
+
+type LessonPlanCreatedEvent struct {
+	mixpanel.MixpanelEvent `mixpanel:"Resource Created"`
+	ResourceEvent
+	LessonCount int `json:"lessonCount"`
+}
+
+type WorksheetCreatedEvent struct {
+	mixpanel.MixpanelEvent `mixpanel:"Resource Created"`
+	ResourceEvent
+}
+
+type DiagnosticTestCreatedEvent struct {
+	mixpanel.MixpanelEvent `mixpanel:"Resource Created"`
+	ResourceEvent
+}
+
+type DiagnosticTestFinishedEvent struct {
+	mixpanel.MixpanelEvent `mixpanel:"Assessment Finished"`
+	Duration               time.Duration `json:"duration"`
+	Year                   string        `json:"year"`
+	SkillCount             int           `json:"skillCount"`
+	ClassName              string        `json:"class"`
+}
+
+// api/events/streams.go
+package events
+
+import natstooling "github.com/MathGaps/nats-tooling"
+
+const (
+	StreamDiagnosticTestSessionUpdated                  = natstooling.Stream[DiagnosticTestSessionUpdated]("resources-diagnostic-test-session-updated")
+	StreamDiagnosticTestSessionStatusUpdated            = natstooling.Stream[DiagnosticTestSessionStatusUpdated]("resources-diagnostic-test-session-status-updated")
+	StreamDiagnosticTestSessionAnsweredQuestionsUpdated = natstooling.Stream[DiagnosticTestSessionQuestionAnswered]("resources-diagnostic-test-session-answered-questions-updated")
+	StreamDiagnosticTestSessionStudentProgressesUpdated = natstooling.Stream[DiagnosticTestSessionProgressChanged]("resources-diagnostic-test-session-student-progresses-updated")
+	StreamActiveDiagnosticTestForStudentUpdated         = natstooling.Stream[ActiveDiagnosticTestForStudentUpdated]("resources-active-diagnostic-test-for-student-updated")
+	StreamClassStudentsReadyForTest                     = natstooling.Stream[ClassStudentsReadyForTest]("resources-class-students-ready-for-test")
+	StreamLessonPlanDocumentationUpdatedDLQ             = natstooling.Stream[LessonPlanDocumentationUpdated]("resources-lesson-plan-documentation-updated-dlq-stream")
+	StreamLessonPlanNodeContextUpdatedDLQ               = natstooling.Stream[LessonPlanNodeContextUpdated]("resources-lesson-plan-node-context-updated-dlq-stream")
+	StreamBulkResourceDuplicationStarted                = natstooling.Stream[BulkResourceDuplicationStarted]("resources-bulk-resource-duplication-started")
+	StreamBulkResourceDuplicationCompleted              = natstooling.Stream[BulkResourceDuplicationCompleted]("resources-bulk-resource-duplication-completed")
+	StreamBulkResourceDeletionStarted                   = natstooling.Stream[BulkResourceDeletionStarted]("resources-bulk-resource-deletion-started")
+	StreamBulkResourceDeletionCompleted                 = natstooling.Stream[BulkResourceDeletionCompleted]("resources-bulk-resource-deletion-completed")
+
+	StreamLessonPlanCoverImageGenerated = natstooling.Stream[LessonPlanCoverImageGenerated]("resources-lesson-plan-cover-image-generated-stream")
+	StreamLessonReadyUpdated            = natstooling.Stream[LessonReadyUpdated]("resources-lesson-ready-updated")
+	StreamLessonPlanReadyUpdated        = natstooling.Stream[LessonPlanReadyUpdated]("resources-lesson-plan-ready-updated")
+	StreamLessonPlanUpdated             = natstooling.Stream[LessonPlanUpdated]("resources-lesson-plan-updated")
+	// TODO: Move this to diagnostics package once migrated to fx
+	StreamDiagnosticTestQuestionAnswered = natstooling.Stream[TestQuestionAnswered]("diagnostics-diagnostic-test-question-answered")
+	StreamDiagnosticTestFinished         = natstooling.Stream[TestFinished]("diagnostics-diagnostic-test-finished")
+
+	// Deprecated
+	StreamDiagnosticTestSessionQuestionAnswered         = natstooling.Stream[DiagnosticTestSessionQuestionAnswered]("resources-diagnostic-test-session-question-answered")
+	StreamDiagnosticTestSessionStudentProgressesChanged = natstooling.Stream[DiagnosticTestSessionProgressChanged]("resources-diagnostic-test-session-student-progresses-changed")
+)
+
+// api/events/subjects.gen.go
+package events
+
+import (
+	"strings"
+
+	natstooling "github.com/MathGaps/nats-tooling"
+)
+
+func NewSubjectDiagnosticTestSessionUpdated(diagnosticTestSessionID string) subjectDiagnosticTestSessionUpdated {
+	return subjectDiagnosticTestSessionUpdated{natstooling.Subject[DiagnosticTestSessionUpdated, any]("resources.diagnostic_test_session." + diagnosticTestSessionID + ".updated")}
+}
+
+func (s subjectDiagnosticTestSessionUpdated) DiagnosticTestSessionID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectDiagnosticTestSessionStatusUpdated(diagnosticTestSessionID string) subjectDiagnosticTestSessionStatusUpdated {
+	return subjectDiagnosticTestSessionStatusUpdated{natstooling.Subject[DiagnosticTestSessionStatusUpdated, any]("resources.diagnostic_test_session." + diagnosticTestSessionID + ".status.updated")}
+}
+
+func (s subjectDiagnosticTestSessionStatusUpdated) DiagnosticTestSessionID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectDiagnosticTestSessionAnsweredQuestionsUpdated(diagnosticTestSessionID string) subjectDiagnosticTestSessionAnsweredQuestionsUpdated {
+	return subjectDiagnosticTestSessionAnsweredQuestionsUpdated{natstooling.Subject[AnsweredQuestionsForSession, any]("resources.diagnostic_test_session." + diagnosticTestSessionID + ".answered.questions.updated")}
+}
+
+func (s subjectDiagnosticTestSessionAnsweredQuestionsUpdated) DiagnosticTestSessionID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectDiagnosticTestSessionStudentProgressesUpdated(diagnosticTestSessionID string) subjectDiagnosticTestSessionStudentProgressesUpdated {
+	return subjectDiagnosticTestSessionStudentProgressesUpdated{natstooling.Subject[StudentProgressesForSession, any]("resources.diagnostic_test_session." + diagnosticTestSessionID + ".student.progresses.updated")}
+}
+
+func (s subjectDiagnosticTestSessionStudentProgressesUpdated) DiagnosticTestSessionID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectActiveDiagnosticTestForStudentUpdated(studentID string) subjectActiveDiagnosticTestForStudentUpdated {
+	return subjectActiveDiagnosticTestForStudentUpdated{natstooling.Subject[ActiveDiagnosticTestForStudentUpdated, any]("resources.active.diagnostic_test.for.student." + studentID + ".updated")}
+}
+
+func (s subjectActiveDiagnosticTestForStudentUpdated) StudentID() string {
+	return strings.Split(string(s.Subject), ".")[5]
+}
+
+func NewSubjectClassStudentsReadyForTest(classID string) subjectClassStudentsReadyForTest {
+	return subjectClassStudentsReadyForTest{natstooling.Subject[ClassStudentsReadyForTest, any]("resources.class." + classID + ".students.ready_for_test")}
+}
+
+func (s subjectClassStudentsReadyForTest) ClassID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+var SubjectLessonPlanDocumentationUpdatedDLQ = subjectLessonPlanDocumentationUpdatedDLQ{natstooling.Subject[LessonPlanDocumentationUpdated, any]("resources.lesson_plan.documentation.updated.dlq")}
+
+var SubjectLessonPlanNodeContextUpdatedDLQ = subjectLessonPlanNodeContextUpdatedDLQ{natstooling.Subject[LessonPlanNodeContextUpdated, any]("resources.lesson_plan_node.context.updated.dlq")}
+
+func NewSubjectBulkResourceDuplicationStarted(bulkDuplicationID string) subjectBulkResourceDuplicationStarted {
+	return subjectBulkResourceDuplicationStarted{natstooling.Subject[BulkResourceDuplicationStarted, any]("resources.bulk_duplication." + bulkDuplicationID + ".started")}
+}
+
+func (s subjectBulkResourceDuplicationStarted) BulkDuplicationID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectBulkResourceDuplicationCompleted(bulkDuplicationID string) subjectBulkResourceDuplicationCompleted {
+	return subjectBulkResourceDuplicationCompleted{natstooling.Subject[BulkResourceDuplicationCompleted, any]("resources.bulk_duplication." + bulkDuplicationID + ".completed")}
+}
+
+func (s subjectBulkResourceDuplicationCompleted) BulkDuplicationID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectBulkResourceDeletionStarted(bulkDeletionID string) subjectBulkResourceDeletionStarted {
+	return subjectBulkResourceDeletionStarted{natstooling.Subject[BulkResourceDeletionStarted, any]("resources.bulk_deletion." + bulkDeletionID + ".started")}
+}
+
+func (s subjectBulkResourceDeletionStarted) BulkDeletionID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectBulkResourceDeletionCompleted(bulkDeletionID string) subjectBulkResourceDeletionCompleted {
+	return subjectBulkResourceDeletionCompleted{natstooling.Subject[BulkResourceDeletionCompleted, any]("resources.bulk_deletion." + bulkDeletionID + ".completed")}
+}
+
+func (s subjectBulkResourceDeletionCompleted) BulkDeletionID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectTestQuestionAnswered(diagnosticTestID string) subjectTestQuestionAnswered {
+	return subjectTestQuestionAnswered{natstooling.Subject[TestQuestionAnswered, any]("diagnostics.diagnostic_test." + diagnosticTestID + ".question.answered")}
+}
+
+func (s subjectTestQuestionAnswered) DiagnosticTestID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectDiagnosticTestFinished(diagnosticTestID string) subjectDiagnosticTestFinished {
+	return subjectDiagnosticTestFinished{natstooling.Subject[TestFinished, any]("diagnostics.diagnostic_test." + diagnosticTestID + ".finished")}
+}
+
+func (s subjectDiagnosticTestFinished) DiagnosticTestID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectLessonPlanCoverImageRequest(lessonPlanID string) subjectLessonPlanCoverImageRequest {
+	return subjectLessonPlanCoverImageRequest{natstooling.Subject[LessonPlanCoverImageRequest, any]("resources.lesson_plan." + lessonPlanID + ".cover_image.requested")}
+}
+
+func (s subjectLessonPlanCoverImageRequest) LessonPlanID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectLessonPlanCoverImageGenerated(lessonPlanID string) subjectLessonPlanCoverImageGenerated {
+	return subjectLessonPlanCoverImageGenerated{natstooling.Subject[LessonPlanCoverImageGenerated, any]("snapshotter.lesson_plan." + lessonPlanID + ".cover_image.generated")}
+}
+
+func (s subjectLessonPlanCoverImageGenerated) LessonPlanID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectDiagnosticTestSessionQuestionAnswered(diagnosticTestSessionID string) subjectDiagnosticTestSessionQuestionAnswered {
+	return subjectDiagnosticTestSessionQuestionAnswered{natstooling.Subject[DiagnosticTestSessionQuestionAnswered, any]("resources.diagnostic_test_session." + diagnosticTestSessionID + ".question.answered")}
+}
+
+func (s subjectDiagnosticTestSessionQuestionAnswered) DiagnosticTestSessionID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectDiagnosticTestSessionProgressChanged(diagnosticTestSessionID string) subjectDiagnosticTestSessionProgressChanged {
+	return subjectDiagnosticTestSessionProgressChanged{natstooling.Subject[DiagnosticTestSessionProgressChanged, any]("resources.diagnostic_test_session." + diagnosticTestSessionID + ".student.progresses.changed")}
+}
+
+func (s subjectDiagnosticTestSessionProgressChanged) DiagnosticTestSessionID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectLessonReadyUpdated(lessonID string) subjectLessonReadyUpdated {
+	return subjectLessonReadyUpdated{natstooling.Subject[LessonReadyUpdated, any]("resources.lesson." + lessonID + ".ready")}
+}
+
+func (s subjectLessonReadyUpdated) LessonID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectLessonPlanReadyUpdated(lessonPlanID string) subjectLessonPlanReadyUpdated {
+	return subjectLessonPlanReadyUpdated{natstooling.Subject[LessonPlanReadyUpdated, any]("resources.lesson_plan." + lessonPlanID + ".ready")}
+}
+
+func (s subjectLessonPlanReadyUpdated) LessonPlanID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectLessonPlanUpdated(lessonPlanID string) subjectLessonPlanUpdated {
+	return subjectLessonPlanUpdated{natstooling.Subject[LessonPlanUpdated, any]("resources.lesson_plan." + lessonPlanID + ".updated")}
+}
+
+func (s subjectLessonPlanUpdated) LessonPlanID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+// api/events/subjects.go
+package events
+
+import (
+	natstooling "github.com/MathGaps/nats-tooling"
+)
+
+type (
+	// subgen:resources.diagnostic_test_session.$.updated
+	subjectDiagnosticTestSessionUpdated struct {
+		natstooling.Subject[DiagnosticTestSessionUpdated, any]
+	}
+	// subgen:resources.diagnostic_test_session.$.status.updated
+	subjectDiagnosticTestSessionStatusUpdated struct {
+		natstooling.Subject[DiagnosticTestSessionStatusUpdated, any]
+	}
+
+	// subgen:resources.diagnostic_test_session.$.answered.questions.updated
+	subjectDiagnosticTestSessionAnsweredQuestionsUpdated struct {
+		natstooling.Subject[AnsweredQuestionsForSession, any]
+	}
+	// subgen:resources.diagnostic_test_session.$.student.progresses.updated
+	subjectDiagnosticTestSessionStudentProgressesUpdated struct {
+		natstooling.Subject[StudentProgressesForSession, any]
+	}
+
+	// subgen:resources.active.diagnostic_test.for.student.$.updated
+	subjectActiveDiagnosticTestForStudentUpdated struct {
+		natstooling.Subject[ActiveDiagnosticTestForStudentUpdated, any]
+	}
+	// subgen:resources.class.$.students.ready_for_test
+	subjectClassStudentsReadyForTest struct {
+		natstooling.Subject[ClassStudentsReadyForTest, any]
+	}
+
+	// subgen:resources.lesson_plan.documentation.updated.dlq
+	subjectLessonPlanDocumentationUpdatedDLQ struct {
+		natstooling.Subject[LessonPlanDocumentationUpdated, any]
+	}
+	// subgen:resources.lesson_plan_node.context.updated.dlq
+	subjectLessonPlanNodeContextUpdatedDLQ struct {
+		natstooling.Subject[LessonPlanNodeContextUpdated, any]
+	}
+
+	// subgen:resources.bulk_duplication.$.started
+	subjectBulkResourceDuplicationStarted struct {
+		natstooling.Subject[BulkResourceDuplicationStarted, any]
+	}
+	// subgen:resources.bulk_duplication.$.completed
+	subjectBulkResourceDuplicationCompleted struct {
+		natstooling.Subject[BulkResourceDuplicationCompleted, any]
+	}
+
+	// subgen:resources.bulk_deletion.$.started
+	subjectBulkResourceDeletionStarted struct {
+		natstooling.Subject[BulkResourceDeletionStarted, any]
+	}
+	// subgen:resources.bulk_deletion.$.completed
+	subjectBulkResourceDeletionCompleted struct {
+		natstooling.Subject[BulkResourceDeletionCompleted, any]
+	}
+
+	// TODO:  Remove these subjects once diagnostics migrated to fx
+
+	// subgen:diagnostics.diagnostic_test.$.question.answered
+	subjectTestQuestionAnswered struct {
+		natstooling.Subject[TestQuestionAnswered, any]
+	}
+	// subgen:diagnostics.diagnostic_test.$.finished
+	subjectDiagnosticTestFinished struct {
+		natstooling.Subject[TestFinished, any]
+	}
+
+	// subgen:resources.lesson_plan.$.cover_image.requested
+	subjectLessonPlanCoverImageRequest struct {
+		natstooling.Subject[LessonPlanCoverImageRequest, any]
+	}
+
+	// subgen:snapshotter.lesson_plan.$.cover_image.generated
+	subjectLessonPlanCoverImageGenerated struct {
+		natstooling.Subject[LessonPlanCoverImageGenerated, any]
+	}
+
+	// Deprecated
+	// subgen:resources.diagnostic_test_session.$.question.answered
+	subjectDiagnosticTestSessionQuestionAnswered struct {
+		natstooling.Subject[DiagnosticTestSessionQuestionAnswered, any]
+	}
+	// subgen:resources.diagnostic_test_session.$.student.progresses.changed
+	subjectDiagnosticTestSessionProgressChanged struct {
+		natstooling.Subject[DiagnosticTestSessionProgressChanged, any]
+	}
+
+	// subgen:resources.lesson.$.ready
+	subjectLessonReadyUpdated struct {
+		natstooling.Subject[LessonReadyUpdated, any]
+	}
+
+	// subgen:resources.lesson_plan.$.ready
+	subjectLessonPlanReadyUpdated struct {
+		natstooling.Subject[LessonPlanReadyUpdated, any]
+	}
+
+	// subgen:resources.lesson_plan.$.updated
+	subjectLessonPlanUpdated struct {
+		natstooling.Subject[LessonPlanUpdated, any]
+	}
+)
+

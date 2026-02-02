@@ -1,0 +1,236 @@
+// api/folder/edges.go
+package folder
+
+import "github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+
+type FolderContainsFolderEdge struct {
+	edge.Edge `neo4j:"CONTAINS"`
+}
+
+type FolderContainsResourceEdge struct {
+	edge.Edge `neo4j:"CONTAINS"`
+}
+
+type UserCreatedFolderEdge struct {
+	edge.Edge `neo4j:"CREATED"`
+}
+
+// api/folder/entity.go
+package folder
+
+import (
+	"time"
+
+	"github.com/rlch/neogo"
+)
+
+type Folder struct {
+	neogo.Node         `neo4j:"Folder"`
+	UUID               string     `json:"uuid"`
+	ClassID            string     `json:"classID"`
+	Name               string     `json:"name"`
+	CoverImageURL      *string    `json:"coverImageURL,omitempty"`
+	CoverImagePosition *float64   `json:"coverImagePosition,omitempty"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	LastViewedAt       *time.Time `json:"lastViewedAt,omitempty"`
+}
+
+func (Folder) IsEntity() {}
+
+// api/folder/repository.go
+package folder
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/common"
+	"github.com/MathGaps/resources/api/resource"
+	"github.com/MathGaps/resources/transport/graph/model"
+	"github.com/qdrant/go-client/qdrant"
+	"github.com/samber/lo"
+)
+
+type Repository interface {
+	GetPath(ctx context.Context, folderID id.ID) ([]*Folder, error)
+	GetAbsolutePath(ctx context.Context, folderID id.ID) (string, error)
+	GetAbsoluteResourcePath(ctx context.Context, resourceID id.ID) (string, error)
+	GetFolder(ctx context.Context, folderID id.ID) (*Folder, error)
+	ResourcesInFolder(ctx context.Context, id id.ID) ([]resource.Resource, error)
+	RootResources(ctx context.Context, classID *id.ID) ([]resource.Resource, error)
+	Subfolders(ctx context.Context, folderID id.ID) ([]*Folder, error)
+	RootFolders(ctx context.Context, classID id.ID) ([]*Folder, error)
+	HasSubfolders(ctx context.Context, folderID id.ID) (bool, error)
+	Create(ctx context.Context, input model.CreateFolderInput) (*Folder, error)
+	MoveFolder(ctx context.Context, folderID id.ID, destinationFolderID id.ID) (*Folder, error)
+	MoveResourceToFolder(ctx context.Context, resourceID id.ID, folderID id.ID) (resource.Resource, error)
+	MoveResourcesToFolder(ctx context.Context, resourceIDs []id.ID, folderID id.ID) (bool, error)
+	DeleteFolder(ctx context.Context, folderID id.ID, keepChildren bool) (bool, error)
+
+	RenameFolder(ctx context.Context, folderID id.ID, newName string) (*Folder, error)
+	MoveResourceToParent(ctx context.Context, resourceID id.ID) (resource.Resource, error)
+	MoveResourcesToRoot(ctx context.Context, resourceIDs []id.ID) (bool, error)
+	MoveFolderToRoot(ctx context.Context, folderID id.ID) (*Folder, error)
+
+	ResourceTypes(ctx context.Context, folderID id.ID) ([]resource.ResourceType, error)
+	ResourceTopics(ctx context.Context, folderID id.ID) ([]id.ID, error)
+	ResourceSubtopics(ctx context.Context, folderID id.ID) ([]id.ID, error)
+	MoveFolderToParent(ctx context.Context, folderID id.ID) (*Folder, error)
+	UpdateFolderCoverImage(ctx context.Context, folderID id.ID, coverImageURL *string, coverImagePosition *float64) (*Folder, error)
+	UpdateLastViewed(ctx context.Context, folderID id.ID) (*Folder, error)
+	UpsertFolderPreview(ctx context.Context, input UpsertFolderPreviewInput) (err error)
+	Search(ctx context.Context, filter *SearchFolderFilter, options *common.OffsetPaginationOptions) (preview []*FolderPreview, err error)
+	SyncFolderPreviewFilters(ctx context.Context, folderID id.ID) (_ []*FolderFilterPreviewOut, err error)
+}
+
+func (i UpsertFolderPreviewInput) QdrantPayload() (map[string]*qdrant.Value, error) {
+	if i.UUID == "" {
+		return nil, errors.New("UUID is required to upsert folder preview")
+	}
+
+	payload := map[string]*qdrant.Value{}
+
+	payload["resourceType"] = qdrant.NewValueString("FOLDER")
+	if i.ID != "" {
+		payload["id"] = qdrant.NewValueString(i.ID)
+	}
+	if i.Name != nil && *i.Name != "" {
+		payload["name"] = qdrant.NewValueString(*i.Name)
+	}
+	if i.Path != nil && *i.Path != "" {
+		payload["path"] = qdrant.NewValueString(*i.Path)
+	}
+	if i.ClassID != nil && *i.ClassID != "" {
+		payload["classID"] = qdrant.NewValueString(*i.ClassID)
+	}
+	if i.CreatedAt != nil {
+		payload["createdAt"] = qdrant.NewValueString(i.CreatedAt.Format(time.RFC3339))
+	}
+	if i.LastViewedAt != nil {
+		payload["lastViewedAt"] = qdrant.NewValueString(i.LastViewedAt.Format(time.RFC3339))
+	}
+
+	if i.Topics != nil && len(*i.Topics) > 0 {
+		topicIDs := lo.Map(*i.Topics, func(id id.ID, _ int) *qdrant.Value {
+			return qdrant.NewValueString(id)
+		})
+		payload["topicIDs"] = qdrant.NewValueList(&qdrant.ListValue{Values: topicIDs})
+	}
+
+	if i.Subtopics != nil && len(*i.Subtopics) > 0 {
+		subtopicIDs := lo.Map(*i.Subtopics, func(id id.ID, _ int) *qdrant.Value {
+			return qdrant.NewValueString(id)
+		})
+		payload["subtopicIDs"] = qdrant.NewValueList(&qdrant.ListValue{Values: subtopicIDs})
+	}
+
+	if i.ResourceTypes != nil && len(*i.ResourceTypes) > 0 {
+		resourceTypes := lo.Map(*i.ResourceTypes, func(rt resource.ResourceType, _ int) *qdrant.Value {
+			return qdrant.NewValueString(string(rt))
+		})
+		payload["resourceTypes"] = qdrant.NewValueList(&qdrant.ListValue{Values: resourceTypes})
+	}
+
+	return payload, nil
+}
+
+type FolderPreview struct {
+	ID            id.ID                   `json:"id"`
+	UUID          id.ID                   `json:"uuid"`
+	Name          string                  `json:"name"`
+	Path          string                  `json:"path"`
+	CreatedAt     time.Time               `json:"createdAt"`
+	LastViewedAt  time.Time               `json:"lastViewedAt"`
+	ClassID       id.ID                   `json:"classId"`
+	Topics        []id.ID                 `json:"topics,omitempty"`
+	Subtopics     []id.ID                 `json:"subtopics,omitempty"`
+	ResourceTypes []resource.ResourceType `json:"resourceTypes,omitempty"`
+}
+
+type UpsertFolderPreview struct {
+	ID            id.ID                   `json:"id"`
+	UUID          id.ID                   `json:"uuid"`
+	Name          string                  `json:"name"`
+	Path          string                  `json:"path"`
+	CreatedAt     time.Time               `json:"createdAt"`
+	LastViewedAt  time.Time               `json:"lastViewedAt"`
+	ClassID       id.ID                   `json:"classId"`
+	Topics        []id.ID                 `json:"topics,omitempty"`
+	Subtopics     []id.ID                 `json:"subtopics,omitempty"`
+	ResourceTypes []resource.ResourceType `json:"resourceTypes,omitempty"`
+}
+
+type UpsertFolderPreviewInput struct {
+	ID                id.ID
+	UUID              string
+	Name              *string
+	Path              *string
+	CreatedAt         *time.Time
+	LastViewedAt      *time.Time
+	ClassID           *id.ID
+	ResourceTypes     *[]resource.ResourceType
+	Topics            *[]id.ID
+	Subtopics         *[]id.ID
+	ShouldCreatePoint bool
+}
+
+type SearchFolderFilter struct {
+	ClassIDs       []id.ID
+	Search         string  `json:"search"`
+	Path           string  `json:"path"`
+	Recursive      bool    `json:"recursive"`
+	ScoreThreshold float64 `json:"scoreThreshold,omitempty"`
+}
+
+func (f *SearchFolderFilter) ToQdrantFilter() *qdrant.Filter {
+	must := []*qdrant.Condition{}
+
+	if len(f.ClassIDs) > 0 {
+		must = append(must, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "classID",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Keywords{
+							Keywords: &qdrant.RepeatedStrings{
+								Strings: f.ClassIDs,
+							},
+						},
+					},
+				},
+			},
+		})
+	}
+
+	if f.Path != "" {
+		path := common.EnsurePathFormat(f.Path)
+		if f.Recursive {
+			must = append(must, &qdrant.Condition{
+				ConditionOneOf: &qdrant.Condition_Field{
+					Field: &qdrant.FieldCondition{
+						Key: "path",
+						Match: &qdrant.Match{
+							MatchValue: &qdrant.Match_Text{
+								Text: path,
+							},
+						},
+					},
+				},
+			})
+		} else {
+			must = append(must, qdrant.NewMatch("path", path))
+		}
+	}
+
+	return &qdrant.Filter{Must: must}
+}
+
+type FolderFilterPreviewOut struct {
+	FolderUUID    id.ID   `json:"folderUUID"`
+	TopicIDs      []id.ID `json:"topicIDs"`
+	SubtopicIDs   []id.ID `json:"subtopicIDs"`
+	ResourceTypes []id.ID `json:"resourceTypes"`
+}
+

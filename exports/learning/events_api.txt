@@ -1,0 +1,133 @@
+// api/events/events.go
+package events
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/learning/v2/api/platform/guttman"
+	natstooling "github.com/MathGaps/nats-tooling"
+)
+
+// Ensure all events implement natstooling.Event
+var (
+	_ natstooling.Event = (*UserGraphTopologyUpdated)(nil)
+	_ natstooling.Event = (*ClassTopicEdited)(nil)
+	_ natstooling.Event = (*UserCreated)(nil)
+	_ natstooling.Event = (*SkillGuttmanForSession)(nil)
+)
+
+// UserGraphTopologyUpdated emits when a user network updated or strands edited,
+// which in turn changes the user's graph topology
+type UserGraphTopologyUpdated struct {
+	UserID  id.ID  `json:"userID"`
+	GroupID *id.ID `json:"groupID"` // The group id is the class this user belongs to
+}
+
+// ClassTopicEdited emits when a topic is edited for class
+type ClassTopicEdited struct {
+	ClassID id.ID `json:"classID"`
+	TopicID id.ID `json:"topicID"`
+}
+
+// UserCreated emits when a new user is created
+type UserCreated struct {
+	UserID id.ID `json:"userID"`
+}
+
+// TODO: Remove this once teaching migrated to fx
+// ClassCreated represents a class created by a teacher
+type ClassCreated struct {
+	ClassID     id.ID  `json:"classID"`
+	TeacherID   id.ID  `json:"teacherID"`
+	WorkspaceID *id.ID `json:"workspaceID,omitempty"`
+}
+
+// ClassStudentsUpdated represents students in a class after adding or removing a student
+type ClassStudentsUpdated struct {
+	ClassID id.ID `json:"id"`
+}
+
+// SkillGuttmanForSession emits when skill guttman is updated for a diagnostic test session
+type SkillGuttmanForSession struct {
+	SessionID          id.ID                   `json:"sessionID"`
+	SkillGuttmanScales []*guttman.GuttmanScale `json:"skillGuttmanScales"`
+}
+
+func (s SkillGuttmanForSession) IsEntity() {}
+
+// api/events/streams.go
+package events
+
+import natstooling "github.com/MathGaps/nats-tooling"
+
+var (
+	StreamUserGraphTopologyUpdated      = natstooling.Stream[UserGraphTopologyUpdated]("learning-user-graph-topology-updated")
+	StreamClassTopicEdited              = natstooling.Stream[ClassTopicEdited]("learning-class-topic-edited")
+	StreamUserCreated                   = natstooling.Stream[UserCreated]("learning-user-created")
+	StreamSkillGuttmanForSessionUpdated = natstooling.Stream[SkillGuttmanForSession]("learning-skill-guttman-for-session-updated")
+
+	// TODO: Remove this once teaching migrated to fx
+	StreamClassCreated         = natstooling.Stream[ClassCreated]("teaching-class-created")
+	StreamClassStudentsUpdated = natstooling.Stream[ClassStudentsUpdated]("teaching-class-students-updated")
+)
+
+// api/events/subjects.gen.go
+package events
+
+import (
+	"strings"
+
+	natstooling "github.com/MathGaps/nats-tooling"
+)
+
+var SubjectUserCreated = subjectUserCreated{natstooling.Subject[UserCreated, any]("learning.user.created")}
+
+func NewSubjectUserGraphTopologyUpdated(userID string) subjectUserGraphTopologyUpdated {
+	return subjectUserGraphTopologyUpdated{natstooling.Subject[UserGraphTopologyUpdated, any]("learning.user." + userID + ".graph.topology.updated")}
+}
+
+func (s subjectUserGraphTopologyUpdated) UserID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectClassTopicEdited(classID string) subjectClassTopicEdited {
+	return subjectClassTopicEdited{natstooling.Subject[ClassTopicEdited, any]("learning.class." + classID + ".topic.edited")}
+}
+
+func (s subjectClassTopicEdited) ClassID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+func NewSubjectSkillGuttmanForSessionUpdated(sessionID string) subjectSkillGuttmanForSessionUpdated {
+	return subjectSkillGuttmanForSessionUpdated{natstooling.Subject[SkillGuttmanForSession, any]("learning.skill_guttman_for_session." + sessionID + ".updated")}
+}
+
+func (s subjectSkillGuttmanForSessionUpdated) SessionID() string {
+	return strings.Split(string(s.Subject), ".")[2]
+}
+
+// api/events/subjects.go
+package events
+
+import (
+	natstooling "github.com/MathGaps/nats-tooling"
+)
+
+type (
+	// subgen:learning.user.created
+	subjectUserCreated struct {
+		natstooling.Subject[UserCreated, any]
+	}
+	// subgen:learning.user.$.graph.topology.updated
+	subjectUserGraphTopologyUpdated struct {
+		natstooling.Subject[UserGraphTopologyUpdated, any]
+	}
+	// subgen:learning.class.$.topic.edited
+	subjectClassTopicEdited struct {
+		natstooling.Subject[ClassTopicEdited, any]
+	}
+	// subgen:learning.skill_guttman_for_session.$.updated
+	subjectSkillGuttmanForSessionUpdated struct {
+		natstooling.Subject[SkillGuttmanForSession, any]
+	}
+)
+

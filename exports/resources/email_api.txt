@@ -1,0 +1,12 @@
+// api/email/repository.go
+package email
+
+import (
+	"context"
+)
+
+type Repository interface {
+	SendDesktopAccessEmail(ctx context.Context, email string) (bool, error)
+	SendResourceAccessEmail(ctx context.Context, email string, resourceID string) (bool, error)
+}
+

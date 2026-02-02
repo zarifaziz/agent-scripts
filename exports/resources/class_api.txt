@@ -1,0 +1,11 @@
+// api/class/entity.go
+package class
+
+import "github.com/MathGaps/core/pkg/domain/id"
+
+type Class struct {
+	ID id.ID `json:"id"`
+}
+
+func (Class) IsEntity() {}
+

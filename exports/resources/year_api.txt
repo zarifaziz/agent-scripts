@@ -1,0 +1,16 @@
+// api/year/entity.go
+package year
+
+import (
+	"time"
+
+	"github.com/rlch/neogo"
+)
+
+type Year struct {
+	neogo.Node `neo4j:"Year,id:year"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+func (Year) IsEntity() {}
+

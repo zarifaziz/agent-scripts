@@ -1,0 +1,253 @@
+// api/upload/entity.go
+package upload
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/resource"
+	"github.com/rlch/neogo"
+)
+
+type Upload interface {
+	neogo.IAbstract
+	resource.Resource
+	IsUpload()
+	GetUploadType() UploadType
+}
+
+type BaseUpload struct {
+	neogo.Abstract        `neo4j:"Upload"`
+	resource.BaseResource `neo4j:"Upload,id:upload"`
+	CreatedAt             time.Time `json:"createdAt"`
+}
+
+func (b BaseUpload) IsUpload()                              {}
+func (b BaseUpload) IsEntity()                              {}
+func (b BaseUpload) IsResource()                            {}
+func (b BaseUpload) GetName() string                        { return b.Name }
+func (b BaseUpload) GetResourceType() resource.ResourceType { return resource.ResourceTypeUpload }
+func (b *BaseUpload) Base() *resource.BaseResource          { return &b.BaseResource }
+func (b *BaseUpload) BaseUploadPtr() *BaseUpload            { return b }
+
+func (BaseUpload) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&VideoUpload{},
+		&LinkUpload{},
+	}
+}
+
+func (BaseUpload) GetUploadType() UploadType { return "" }
+
+// --- Video Upload ---
+
+type VideoUpload struct {
+	BaseUpload `neo4j:"UploadVideo"`
+	URL        string `json:"url"`
+	Thumbnail  string `json:"thumbnail,omitempty"`
+}
+
+func (VideoUpload) GetUploadType() UploadType { return UploadTypeVideo }
+
+// --- Link Upload ---
+
+type LinkUpload struct {
+	BaseUpload `neo4j:"UploadLink"`
+	URL        string `json:"url"`
+	Thumbnail  string `json:"thumbnail,omitempty"`
+}
+
+func (LinkUpload) GetUploadType() UploadType { return UploadTypeLink }
+
+// --- Upload Type Enum ---
+
+type UploadType string
+
+const (
+	UploadTypeVideo UploadType = "VIDEO"
+	UploadTypeLink  UploadType = "LINK"
+)
+
+var AvailableUploadTypes = []UploadType{
+	UploadTypeVideo,
+	UploadTypeLink,
+}
+
+// --- Input Types ---
+
+type CreateUploadInput struct {
+	Name        string       `json:"name"`
+	UploadType  UploadType   `json:"uploadType"`
+	FolderID    *string      `json:"folderID,omitempty"`
+	VideoConfig *VideoConfig `json:"videoConfig,omitempty"`
+	LinkConfig  *LinkConfig  `json:"linkConfig,omitempty"`
+}
+
+type VideoConfig struct {
+	URL       string `json:"url"`
+	Thumbnail string `json:"thumbnail,omitempty"`
+}
+
+type LinkConfig struct {
+	URL       string `json:"url"`
+	Thumbnail string `json:"thumbnail,omitempty"`
+}
+
+type UpdateUploadInput struct {
+	Name        *string      `json:"name,omitempty"`
+	VideoConfig *VideoConfig `json:"videoConfig,omitempty"`
+	LinkConfig  *LinkConfig  `json:"linkConfig,omitempty"`
+}
+
+// UploadPreview represents an upload resource preview for search/listing.
+type UploadPreview struct {
+	BaseUpload
+	UploadType  UploadType `json:"uploadType"`
+	ClassID     string     `json:"classID"`
+	Path        string     `json:"path"`
+	URL         string     `json:"url"`
+	Thumbnail   string     `json:"thumbnail,omitempty"`
+	TopicIDs    []id.ID    `json:"topicIDs"`
+	SubtopicIDs []id.ID    `json:"subtopicIDs"`
+}
+
+func (u *UploadPreview) GetPath() string { return u.Path }
+
+// api/upload/repository.go
+package upload
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type Repository interface {
+	Get(ctx context.Context, uploadID id.ID) (Upload, error)
+	CreateForIndividual(ctx context.Context, input CreateUploadInput) (Upload, error)
+	CreateForClass(ctx context.Context, classID id.ID, input CreateUploadInput) (Upload, error)
+	Update(ctx context.Context, uploadID id.ID, input UpdateUploadInput) (Upload, error)
+	Delete(ctx context.Context, uploadID id.ID) (bool, error)
+	DuplicateUploadToClass(ctx context.Context, uploadID id.ID, classID id.ID, folderID id.ID) (Upload, error)
+}
+
+// api/upload/upload_preview_test.go
+package upload_test
+
+import (
+	"testing"
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/resource"
+	"github.com/MathGaps/resources/api/upload"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestUploadPreview(t *testing.T) {
+	t.Parallel()
+
+	t.Run("GetPath returns path field", func(t *testing.T) {
+		t.Parallel()
+
+		preview := &upload.UploadPreview{
+			BaseUpload: upload.BaseUpload{
+				BaseResource: resource.BaseResource{
+					Name:         "Test Video",
+					Type:         resource.ResourceTypeUpload,
+					UUID:         "test-uuid-1234",
+					LastViewedAt: time.Now(),
+				},
+				CreatedAt: time.Now(),
+			},
+			UploadType: upload.UploadTypeVideo,
+			ClassID:    string(id.MustNew()),
+			Path:       "~/folder1/folder2/",
+			URL:        "https://youtube.com/watch?v=test",
+			Thumbnail:  "https://img.youtube.com/vi/test/default.jpg",
+		}
+
+		assert.Equal(t, "~/folder1/folder2/", preview.GetPath())
+	})
+
+	t.Run("has correct upload type", func(t *testing.T) {
+		t.Parallel()
+
+		videoPreview := &upload.UploadPreview{
+			UploadType: upload.UploadTypeVideo,
+		}
+		assert.Equal(t, upload.UploadTypeVideo, videoPreview.UploadType)
+
+		linkPreview := &upload.UploadPreview{
+			UploadType: upload.UploadTypeLink,
+		}
+		assert.Equal(t, upload.UploadTypeLink, linkPreview.UploadType)
+	})
+
+	t.Run("implements ResourcePreview interface through GetPath", func(t *testing.T) {
+		t.Parallel()
+
+		preview := &upload.UploadPreview{
+			Path: "~/test/",
+		}
+
+		var _ interface{ GetPath() string } = preview
+		assert.Equal(t, "~/test/", preview.GetPath())
+	})
+}
+
+func TestUploadPreviewTopicsSubtopics(t *testing.T) {
+	t.Parallel()
+
+	t.Run("upload preview has topicIDs and subtopicIDs fields", func(t *testing.T) {
+		t.Parallel()
+
+		topicID1 := id.MustNew()
+		topicID2 := id.MustNew()
+		subtopicID1 := id.MustNew()
+
+		preview := upload.UploadPreview{
+			BaseUpload: upload.BaseUpload{
+				BaseResource: resource.BaseResource{
+					Name: "Test Upload",
+					Type: resource.ResourceTypeUpload,
+				},
+			},
+			UploadType:  upload.UploadTypeVideo,
+			ClassID:     string(id.MustNew()),
+			Path:        "~/",
+			URL:         "https://example.com",
+			TopicIDs:    []id.ID{topicID1, topicID2},
+			SubtopicIDs: []id.ID{subtopicID1},
+		}
+
+		assert.NotEmpty(t, preview.Name)
+		assert.Equal(t, upload.UploadTypeVideo, preview.UploadType)
+		assert.Len(t, preview.TopicIDs, 2)
+		assert.Len(t, preview.SubtopicIDs, 1)
+		assert.Contains(t, preview.TopicIDs, topicID1)
+		assert.Contains(t, preview.TopicIDs, topicID2)
+		assert.Contains(t, preview.SubtopicIDs, subtopicID1)
+	})
+
+	t.Run("upload preview with empty topicIDs and subtopicIDs", func(t *testing.T) {
+		t.Parallel()
+
+		preview := upload.UploadPreview{
+			BaseUpload: upload.BaseUpload{
+				BaseResource: resource.BaseResource{
+					Name: "Test Upload",
+					Type: resource.ResourceTypeUpload,
+				},
+			},
+			UploadType: upload.UploadTypeVideo,
+			ClassID:    string(id.MustNew()),
+			Path:       "~/",
+			URL:        "https://example.com",
+		}
+
+		assert.Empty(t, preview.TopicIDs)
+		assert.Empty(t, preview.SubtopicIDs)
+	})
+}
+

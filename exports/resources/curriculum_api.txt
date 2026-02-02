@@ -1,0 +1,23 @@
+// api/curriculum/entity.go
+package curriculum
+
+import (
+	"time"
+
+	"github.com/rlch/neogo"
+)
+
+type Curriculum struct {
+	neogo.Node `neo4j:"curriculum,id:curriculum"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+func (Curriculum) IsEntity() {}
+
+type Substrand struct {
+	neogo.Node `neo4j:"Substrand,id:substrand"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+func (Substrand) IsEntity() {}
+

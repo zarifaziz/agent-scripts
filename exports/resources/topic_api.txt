@@ -1,0 +1,31 @@
+// api/topic/entity.go
+package topic
+
+import (
+	"time"
+
+	"github.com/rlch/neogo"
+)
+
+type BaseTopic struct {
+	neogo.Node `neo4j:"BaseTopic"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+func (BaseTopic) IsEntity() {}
+
+// api/topic/repository.go
+package topic
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type Repository interface {
+	FilterTopics(ctx context.Context, topicIDs []id.ID, withLessonPlan bool) ([]id.ID, error)
+	IsTopicDiagnosedForClass(ctx context.Context, classID id.ID, topicID id.ID) (bool, error)
+	AreTopicsDiagnosedForClass(ctx context.Context, classID id.ID, topicIDs []id.ID) (map[id.ID]bool, error)
+}
+

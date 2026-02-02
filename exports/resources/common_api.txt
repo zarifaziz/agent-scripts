@@ -1,0 +1,191 @@
+// api/common/common.go
+package common
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+)
+
+type Progress struct {
+	Correct float64 `json:"correct"`
+	Wrong   float64 `json:"wrong"`
+}
+type SessionProgress string
+
+func (s *Progress) ToSessionProgress() (*SessionProgress, error) {
+	progressStr, err := json.Marshal(*s)
+	if err != nil {
+		return nil, fmt.Errorf("failed marshalling session progress: %w", err)
+	}
+	sp := SessionProgress(progressStr)
+	return &sp, nil
+}
+
+func (s *SessionProgress) ToProgress() (*Progress, error) {
+	var p Progress
+	err := json.Unmarshal([]byte(*s), &p)
+	if err != nil {
+		return nil, fmt.Errorf("failed unmarshalling session progress: %w", err)
+	}
+	return &p, nil
+}
+
+type IconMapType map[string]any
+
+func (i IconMapType) MarshalJSON() ([]byte, error) {
+	b, err := json.Marshal(map[string]any(i))
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(string(b))
+}
+
+func (i *IconMapType) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		// If it isn't a JSON string literal, assume it's already unquoted.
+		var m map[string]any
+		if err2 := json.Unmarshal(b, &m); err2 != nil {
+			return fmt.Errorf("IconMapType: cannot unmarshal data: %w", err2)
+		}
+		*i = IconMapType(m)
+		return nil
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return fmt.Errorf("IconMapType: cannot unmarshal inner string content: %w", err)
+	}
+
+	*i = IconMapType(m)
+	return nil
+}
+
+func (i *IconMapType) UnmarshalGQL(v interface{}) error {
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("can't assert type map[string]interface{} while unmarshalling graphql to IconMapType")
+	}
+	*i = IconMapType(m)
+	return nil
+}
+
+func (i IconMapType) MarshalGQL(w io.Writer) {
+	b, err := json.Marshal(map[string]any(i))
+	if err != nil {
+		panic("cannot marshal IconMapType: " + err.Error())
+	}
+	_, err = w.Write(b)
+	if err != nil {
+		panic("cannot write marshalled IconMapType: " + err.Error())
+	}
+}
+
+type OffsetPaginationOptions struct {
+	Offset int `json:"offset"`
+	Limit  int `json:"limit"`
+}
+
+type SearchOffsetPaginationOptions struct {
+	Offset     int    `json:"offset"`
+	Limit      int    `json:"limit"`
+	StartsFrom string `json:"startsFrom,omitempty"`
+	OrderBy    string `json:"orderBy,omitempty"`
+}
+
+func EnsurePathFormat(path string) string {
+	if len(path) == 0 {
+		return "~/"
+	}
+	if path[0] == '/' {
+		path = "~" + path
+	} else if path[0] != '~' {
+		path = "~/" + path
+	}
+	if path[len(path)-1] != '/' {
+		path = path + "/"
+	}
+	return path
+}
+
+// api/common/common_test.go
+package common_test
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/MathGaps/resources/api/common"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestIconMapType(t *testing.T) {
+	t.Parallel()
+	t.Run("TestUnmarshalJSON", func(t *testing.T) {
+		t.Parallel()
+		testCases := []struct {
+			name     string
+			input    []byte
+			expected common.IconMapType
+			wantErr  bool
+		}{
+			{
+				name:     "quoted and escaped JSON string",
+				input:    []byte(`"{\"embed\":\"icon_for_embed\"}"`),
+				expected: common.IconMapType{"embed": "icon_for_embed"},
+				wantErr:  false,
+			},
+			{
+				name:     "normal JSON string",
+				input:    []byte(`{"embed":"icon_for_embed"}`),
+				expected: common.IconMapType{},
+				wantErr:  true,
+			},
+		}
+		for _, tc := range testCases {
+			variable := common.IconMapType{}
+			err := json.Unmarshal(tc.input, &variable)
+			assert.Equal(t, tc.expected, variable)
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		}
+	})
+}
+
+func TestEnsurePathFormat(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		path     string
+		expected string
+	}{
+		{
+			path:     "~/a/b/c",
+			expected: "~/a/b/c/",
+		},
+		{
+			path:     "a/b/c",
+			expected: "~/a/b/c/",
+		},
+		{
+			path:     "/a/b/c",
+			expected: "~/a/b/c/",
+		},
+		{
+			path:     "/a/b/c/",
+			expected: "~/a/b/c/",
+		},
+		{
+			path:     "",
+			expected: "~/",
+		},
+	}
+	for _, test := range tests {
+		actual := common.EnsurePathFormat(test.path)
+		assert.Equal(t, test.expected, actual)
+	}
+}
+

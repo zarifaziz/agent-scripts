@@ -1,0 +1,1438 @@
+// api/platform/class/entity.go
+package class
+
+import "github.com/MathGaps/core/pkg/domain/id"
+
+type Class struct {
+	ID id.ID `json:"id"`
+}
+
+func (Class) IsEntity() {}
+
+// api/platform/common.go
+package platform
+
+import "errors"
+
+const (
+	AUSP10CourseID         = "GkRY2Bgs9P1bG3YVp7a8"
+	StandardMathsSubjectID = "SDRhoi4abfEpBOE6WGkC"
+	Year10MathsNetworkID   = "Pz2ytRmUtuGeD8nc4EaO"
+	Year10ID               = "EnQ30qNejnttYSwceMCE"
+	DefaultCurriculumID    = "curriculum_01J7JCAY81KGRP3Z4Y1WHFSQDE"
+	ResourceCachePrefix    = "network-resources"
+)
+
+func DefaultMathsNetworkIDs() []string {
+	return []string{
+		"Pz2ytRmUtuGeD8nc4EaO",               // AU Year 10 network
+		"network_01J875YW9G24MX1WN2J95W70YK", // US Year 8 network
+	}
+}
+
+var ErrCacheKeyNotFound = errors.New("cache key not found")
+
+type Progress struct {
+	Correct float64 `json:"correct"`
+	Wrong   float64 `json:"wrong"`
+}
+
+func (p *Progress) Add(progress Progress) {
+	p.Correct += progress.Correct
+	p.Wrong += progress.Wrong
+}
+
+func (p *Progress) Divide(divisor float64) {
+	p.Correct /= divisor
+	p.Wrong /= divisor
+}
+
+// api/platform/diagnostic_test/entity.go
+package diagnostictest
+
+import "github.com/MathGaps/core/pkg/domain/id"
+
+type TestSummary struct {
+	ID      id.ID
+	TopicID id.ID
+}
+
+func (TestSummary) IsEntity() {}
+
+// api/platform/edges/edges.go
+package platformedges
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+)
+
+type UserTaughtSkillEdge struct {
+	edge.Edge `neo4j:"TAUGHT"`
+}
+
+type UserFlaggedSkillEdge struct {
+	edge.Edge `neo4j:"FLAGGED"`
+}
+
+type QuestionGroupTag string
+
+const (
+	Flagged QuestionGroupTag = "FLAGGED"
+	Taught  QuestionGroupTag = "TAUGHT"
+)
+
+type UserTaggedQuestionGroupEdge struct {
+	edge.Edge `neo4j:"TAGGED"`
+	Tag       QuestionGroupTag `json:"tag"`
+}
+
+type UserCommentedOnSubtopicEdge struct {
+	edge.Edge   `neo4j:"COMMENTED"`
+	ID          id.ID     `json:"id"`
+	Comment     string    `json:"comment"`
+	CommentedBy id.ID     `json:"commentedBy"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+type UserCommentedOnHomeworkEdge struct {
+	edge.Edge `neo4j:"COMMENTED"`
+	ID        id.ID     `json:"id"`
+	Comment   string    `json:"comment"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type UserAnsweredQuestionEdge struct {
+	edge.Edge `neo4j:"ANSWERED"`
+	ID        id.ID      `json:"id"`
+	Answer    string     `json:"answer"`
+	IsCorrect bool       `json:"isCorrect"`
+	CreatedAt time.Time  `json:"createdAt"`
+	Cleared   *time.Time `json:"clearedAt"`
+}
+
+type HomeworkWithMetadataEdge struct {
+	edge.Edge `neo4j:"WITH"`
+}
+
+type HomeworkEvaluatesTopicEdge struct {
+	edge.Edge `neo4j:"EVALUATES"`
+}
+
+type HomeworkEvaluatesSubtopicEdge struct {
+	edge.Edge `neo4j:"EVALUATES"`
+}
+
+type HomeworkEvaluatesSubjectEdge struct {
+	edge.Edge `neo4j:"EVALUATES"`
+}
+
+type HomeworkEvaluatesSkillEdge struct {
+	edge.Edge `neo4j:"EVALUATES"`
+}
+
+type UserIsAssignedHomeworkEdge struct {
+	edge.Edge `neo4j:"IS_ASSIGNED"`
+}
+
+// UserStudiesNetworkEdge is an edge between User and Network under the context of a course.
+type UserStudiesNetworkEdge struct {
+	edge.Edge `neo4j:"STUDIES"`
+	CourseID  id.ID `json:"courseID"`
+}
+
+type UserStudiesCourseEdge struct {
+	edge.Edge `neo4j:"STUDIES"`
+}
+
+type UserStudiesInYearEdge struct {
+	edge.Edge `neo4j:"STUDIES_IN"`
+}
+
+type UserStudiesInRegionEdge struct {
+	edge.Edge `neo4j:"STUDIES_IN"`
+}
+
+type UserTeachesInRegionEdge struct {
+	edge.Edge `neo4j:"TEACHES_IN"`
+}
+
+type SubtopicState string
+
+var (
+	SubtopicStateComplete         SubtopicState = "COMPLETE"
+	SubtopicStateTeaching         SubtopicState = "TEACHING"
+	SubtopicStateReturnLater      SubtopicState = "RETURN_LATER"
+	SubtopicStateReadyToTeach     SubtopicState = "READY_TO_TEACH"
+	SubtopicStateLessonNotPlanned SubtopicState = "LESSON_NOT_PLANNED"
+	SubtopicStateProcessing       SubtopicState = "PROCESSING"
+)
+
+var SubtopicStateHierarchy = map[SubtopicState]int{
+	SubtopicStateLessonNotPlanned: 0,
+	SubtopicStateProcessing:       1,
+	SubtopicStateReadyToTeach:     2,
+	SubtopicStateTeaching:         3,
+	SubtopicStateReturnLater:      4,
+	SubtopicStateComplete:         5,
+}
+
+type UserHasStateSubtopicEdge struct {
+	edge.Edge `neo4j:"HAS_STATE"`
+	State     SubtopicState `json:"state"`
+}
+
+type UserStudiesCurriculumEdge struct {
+	edge.Edge `neo4j:"STUDIES"`
+}
+
+type UserSelectedSubtopicEdge struct {
+	edge.Edge `neo4j:"SELECTED"`
+	TopicID   id.ID `json:"topicID"`
+	Order     int   `json:"order"`
+}
+
+type InGroupUserEdge struct {
+	edge.Edge `neo4j:"IN_GROUP"`
+}
+
+// api/platform/guttman/entity.go
+package guttman
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/learning/v2/api/platform"
+)
+
+type GuttmanOrdinal string
+
+const (
+	GuttmanOrdinalNotEnoughInfo GuttmanOrdinal = "NOT_ENOUGH_INFO"
+	GuttmanOrdinalBelowAverage  GuttmanOrdinal = "BELOW_AVERAGE"
+	GuttmanOrdinalAverage       GuttmanOrdinal = "AVERAGE"
+	GuttmanOrdinalAboveAverage  GuttmanOrdinal = "ABOVE_AVERAGE"
+)
+
+type GuttmanObservation struct {
+	AttributeID id.ID             `json:"attributeID"`
+	Progress    platform.Progress `json:"progress"`
+	Ordinal     GuttmanOrdinal    `json:"ordinal"`
+}
+
+type GuttmanScale struct {
+	UserID       id.ID                `json:"userID"`
+	Progress     platform.Progress    `json:"progress"`
+	Observations []GuttmanObservation `json:"observations"`
+	Ordinal      GuttmanOrdinal       `json:"ordinal"`
+	Grade        string               `json:"grade"`
+}
+
+// api/platform/guttman/repository.go
+package guttman
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/learning/v2/api/platform"
+)
+
+type Repository interface {
+	GuttmanForStudents(ctx context.Context, subtopicIDs, skillIDs []id.ID, inputs []*StudentTestIDInput) (*GuttmanForStudents, error)
+	SubtopicGuttmanForStudents(ctx context.Context, subtopicIDs []id.ID, skillIDs []id.ID, inputs []*StudentTestIDInput) ([]*SubtopicGuttmanForClass, error)
+
+	GuttmanForClass(ctx context.Context, classID id.ID) ([]*GuttmanScale, error)
+	TopicGuttmanForClass(ctx context.Context, classID, topicID id.ID, diagnosed bool) ([]*GuttmanScale, error)
+	SubtopicGuttmanForClass(ctx context.Context, classID, topicID, subtopicID id.ID) ([]*GuttmanScale, error)
+
+	GuttmanForSession(ctx context.Context, sessionID id.ID) (*GuttmanForStudents, error)
+	SubtopicGuttmanForSession(ctx context.Context, sessionID id.ID) ([]*SubtopicGuttmanForClass, error)
+	SkillGuttmanForSession(ctx context.Context, sessionID id.ID) ([]*GuttmanScale, error)
+}
+
+type StudentTestIDInput struct {
+	StudentID id.ID `json:"studentID"`
+	TestID    id.ID `json:"testID"`
+}
+
+type GuttmanForStudents struct {
+	AttributeProgresses []*AttributeProgress
+	GuttmanScales       []*GuttmanScale
+}
+
+type AttributeProgress struct {
+	AttributeID id.ID             `json:"attributeID"`
+	Progress    platform.Progress `json:"progress"`
+}
+
+type SubtopicGuttmanForClass struct {
+	ID                 id.ID
+	Progress           platform.Progress
+	GuttmanScale       []*GuttmanScale
+	SkillGuttmanScales []*GuttmanScale
+}
+
+// api/platform/homework/descriptive_homework/entity.go
+package descriptivehomework
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+
+	"github.com/MathGaps/learning/v2/api/platform/homework"
+)
+
+type DescriptiveHomework struct {
+	homework.BaseHomework
+	node.Node   `neo4j:"DescriptiveHomework,id:hw"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+func (DescriptiveHomework) IsHomework() {}
+func (r DescriptiveHomework) GetID() id.ID {
+	return r.ID
+}
+
+type HomeworkMetadata struct {
+	node.Node `neo4j:"HomeworkMetadata"`
+	Title     string `json:"title"`
+	URL       string `json:"url"`
+}
+
+type HomeworkMetadataInput struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+type CreateDescriptiveHomeworkInput struct {
+	DescriptiveHomework
+	homework.CreateAdditionalInfo
+	Metadata *HomeworkMetadataInput
+}
+
+type UpdateDescriptiveHomeworkInput struct {
+	homework.UpdateAdditionalInfo
+	DueAt       *time.Time `json:"dueAt"`
+	Complete    *bool      `json:"complete"`
+	Title       *string    `json:"title"`
+	Description *string    `json:"description"`
+	Metadata    *HomeworkMetadataInput
+}
+
+// api/platform/homework/descriptive_homework/repository.go
+package descriptivehomework
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type Repository interface {
+	Create(ctx context.Context, input CreateDescriptiveHomeworkInput) (*DescriptiveHomework, error)
+	GetMetadata(ctx context.Context, homeworkID id.ID) (_ *HomeworkMetadata, err error)
+	Update(ctx context.Context, homeworkID id.ID, input UpdateDescriptiveHomeworkInput) (*DescriptiveHomework, error)
+}
+
+// api/platform/homework/entity.go
+package homework
+
+import (
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/pagination"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+)
+
+type HomeworkPeriod string
+
+const (
+	HomeworkPeriodCurrent HomeworkPeriod = "CURRENT"
+	HomeworkPeriodPast    HomeworkPeriod = "PAST"
+)
+
+type Homework interface {
+	IsHomework()
+	GetID() id.ID
+}
+
+type BaseHomework struct {
+	node.Abstract `baseType:"Homework"`
+	DueAt         *time.Time `json:"dueAt" neo4j:"optional"`
+	Complete      bool       `json:"complete"`
+}
+
+type CreateAdditionalInfo struct {
+	SubjectID  id.ID
+	TopicID    *id.ID
+	SubtopicID *id.ID
+}
+
+type UpdateAdditionalInfo struct {
+	SubjectID  *id.ID
+	TopicID    *id.ID
+	SubtopicID *id.ID
+}
+
+type HomeworkPaginationOptions struct {
+	*pagination.PaginationOptions
+	Period HomeworkPeriod
+}
+
+// api/platform/homework/practice_question_homework/entity.go
+package practicequestionhomework
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+
+	"github.com/MathGaps/learning/v2/api/platform/homework"
+)
+
+type PracticeQuestionHomework struct {
+	homework.BaseHomework
+	node.Node      `neo4j:"PracticeQuestionHomework,id:hw"`
+	TotalQuestions int `json:"totalQuestions"`
+}
+
+func (PracticeQuestionHomework) IsHomework() {}
+func (r PracticeQuestionHomework) GetID() id.ID {
+	return r.ID
+}
+
+type CreatePracticeQuestionHomeworkInput struct {
+	PracticeQuestionHomework
+	homework.CreateAdditionalInfo
+	Skills []id.ID
+}
+
+type UpdatePracticeQuestionHomeworkInput struct {
+	*PracticeQuestionHomework
+	homework.UpdateAdditionalInfo
+	Skills []id.ID
+}
+
+// api/platform/homework/practice_question_homework/repository.go
+package practicequestionhomework
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+
+	"github.com/MathGaps/learning/v2/api/content/skill"
+)
+
+type Repository interface {
+	Create(ctx context.Context, input CreatePracticeQuestionHomeworkInput) (*PracticeQuestionHomework, error)
+	GetEvaluatedSkills(ctx context.Context, homeworkID id.ID) ([]*skill.Skill, error)
+	Update(ctx context.Context, homeworkID id.ID, input UpdatePracticeQuestionHomeworkInput) (*PracticeQuestionHomework, error)
+}
+
+// api/platform/homework/repository.go
+package homework
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/pagination"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/subject"
+	"github.com/MathGaps/learning/v2/api/content/subtopic"
+	"github.com/MathGaps/learning/v2/api/content/topic"
+	platformedges "github.com/MathGaps/learning/v2/api/platform/edges"
+)
+
+type Repository interface {
+	repository.AbstractCRUDRepository[Homework]
+	GetUserHomeworks(ctx context.Context, options *HomeworkPaginationOptions) (*pagination.Connection[Homework], error)
+	GetIncompleteUserHomeworks(ctx context.Context) ([]Homework, error)
+	GetAllUserHomeworks(ctx context.Context, options *edge.GetAllEdgeOptions) ([]Homework, error)
+	GetTopic(ctx context.Context, homeworkID id.ID) (*topic.Topic, error)
+	GetSubtopic(ctx context.Context, homeworkID id.ID) (*subtopic.Subtopic, error)
+	GetSubject(ctx context.Context, homeworkID id.ID) (*subject.Subject, error)
+	AddComment(ctx context.Context, homeworkID id.ID, input CreateHomeworkCommentInput) (*platformedges.UserCommentedOnHomeworkEdge, error)
+	UpdateComment(ctx context.Context, homeworkID id.ID, input UpdateHomeworkCommentInput) (*platformedges.UserCommentedOnHomeworkEdge, error)
+	RemoveComment(ctx context.Context, homeworkID, commentID id.ID) error
+	GetAllComments(ctx context.Context, homeworkID id.ID, options *edge.GetAllEdgeOptions) ([]*platformedges.UserCommentedOnHomeworkEdge, error)
+}
+
+type CreateHomeworkCommentInput struct {
+	Comment string
+}
+
+type UpdateHomeworkCommentInput struct {
+	ID      id.ID
+	Comment string
+}
+
+// api/platform/homework/subtopic_test_homework/entity.go
+package subtopictesthomework
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+
+	"github.com/MathGaps/learning/v2/api/platform/homework"
+)
+
+type SubtopicTestHomework struct {
+	homework.BaseHomework
+	node.Node `neo4j:"SubtopicTestHomework,id:hw"`
+}
+
+func (SubtopicTestHomework) IsHomework() {}
+func (r SubtopicTestHomework) GetID() id.ID {
+	return r.ID
+}
+
+type CreateSubtopicTestHomeworkInput struct {
+	SubtopicTestHomework
+	homework.CreateAdditionalInfo
+}
+
+type UpdateSubtopicTestHomeworkInput struct {
+	*SubtopicTestHomework
+	homework.UpdateAdditionalInfo
+}
+
+// api/platform/homework/subtopic_test_homework/repository.go
+package subtopictesthomework
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type Repository interface {
+	Create(ctx context.Context, input CreateSubtopicTestHomeworkInput) (*SubtopicTestHomework, error)
+	Update(ctx context.Context, homeworkID id.ID, input UpdateSubtopicTestHomeworkInput) (*SubtopicTestHomework, error)
+}
+
+// api/platform/knowledge/repository.go
+package knowledge
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type Repository interface {
+	GetKnowledgeTree(ctx context.Context, input GetKnowledgeTreeInput) (*KnowledgeTree, error)
+	EvictKnowledgeTreeCache(ctx context.Context) error
+}
+
+type GetKnowledgeTreeInput struct {
+	ClassID *string `json:"classID,omitempty"`
+	YearID  *string `json:"yearID,omitempty"`
+}
+
+type KnowledgeTree struct {
+	Topics []KnowledgeTreeTopic `json:"topics"`
+}
+
+// KnowledgeTreeTopic represents a topic in the skill tree hierarchy
+type KnowledgeTreeTopic struct {
+	ID        id.ID                   `json:"id"`
+	Title     string                  `json:"title"`
+	Color     string                  `json:"color"`
+	Emoji     string                  `json:"emoji"`
+	Subtopics []KnowledgeTreeSubtopic `json:"subtopics"`
+}
+
+func (*KnowledgeTreeTopic) IsEntity() {}
+
+// KnowledgeTreeSubtopic represents a subtopic in the skill tree hierarchy
+type KnowledgeTreeSubtopic struct {
+	ID     id.ID                `json:"id"`
+	Title  string               `json:"title"`
+	Icon   string               `json:"icon"`
+	Skills []KnowledgeTreeSkill `json:"skills"`
+}
+
+func (*KnowledgeTreeSubtopic) IsEntity() {}
+
+// KnowledgeTreeSkill represents a skill in the skill tree hierarchy
+type KnowledgeTreeSkill struct {
+	ID     id.ID  `json:"id"`
+	Title  string `json:"title"`
+	Taught bool   `json:"taught"`
+}
+
+func (*KnowledgeTreeSkill) IsEntity() {}
+
+// api/platform/network/repository.go
+package platformnetwork
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+
+	"github.com/MathGaps/learning/v2/api/content/network"
+	"github.com/MathGaps/learning/v2/api/content/skill"
+)
+
+type DefaultNetworkInput struct {
+	CourseID  id.ID `json:"courseID"`
+	YearID    id.ID `json:"yearID"`
+	SubjectID id.ID `json:"subjectID"`
+}
+
+type MathsNetworkIdentifier struct {
+	NetworkID id.ID `json:"networkID"`
+	CourseID  id.ID `json:"courseID"`
+	RegionID  id.ID `json:"regionID"`
+}
+
+type Repository interface {
+	GetPlatformParentNetworks(ctx context.Context, networkID id.ID) ([]*network.Network, error)
+	GetUserMathsNetwork(ctx context.Context, userID id.ID) (*network.Network, error)
+	GetUserNetwork(ctx context.Context) (*network.Network, error)
+	GetDefaultNetworkID(ctx context.Context, input DefaultNetworkInput) (id.ID, error)
+	GetMathsNetworkForYear(ctx context.Context, yearID id.ID) (*network.Network, error)
+	OverrideMathsNetwork(ctx context.Context, mathsNetworkID id.ID) context.Context
+	OverrideRegionAndCourse(ctx context.Context, regionID, courseID id.ID) context.Context
+	GetNetworksForYearRange(ctx context.Context, startYear, endYear int) ([]*network.Network, error)
+	GetUserMathsNetworkIdentifier(ctx context.Context) (*MathsNetworkIdentifier, error)
+	EvictAllResourcesFromCache(ctx context.Context) error
+	GetUserRegionAndCourse(ctx context.Context) (*UserRegionAndCourse, error)
+	GetMathsNetwork(ctx context.Context, userID id.ID, yearID *id.ID) (*network.Network, error)
+}
+
+type BaseAndPrerequisiteSkills struct {
+	BaseSkills         []*skill.Skill `json:"baseSkills"`
+	PrerequisiteSkills []*skill.Skill `json:"prerequisiteSkills"`
+}
+
+type UserRegionAndCourse struct {
+	RegionID id.ID `json:"regionID"`
+	CourseID id.ID `json:"courseID"`
+}
+
+// api/platform/question/repository.go
+package platformquestion
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/types"
+	"github.com/MathGaps/learning/v2/api/content/question"
+	questiontype "github.com/MathGaps/learning/v2/api/content/question_type"
+	platformedges "github.com/MathGaps/learning/v2/api/platform/edges"
+)
+
+type Repository interface {
+	AddPracticeQuestionAnswer(ctx context.Context, questionID id.ID, answer string) (*platformedges.UserAnsweredQuestionEdge, error)
+	ResetPracticeQuestion(ctx context.Context, questionID id.ID) (bool, error)
+	ResetPracticeQuestions(ctx context.Context, questionIDs []id.ID) (bool, error)
+	RemovePracticeQuestionAnswer(ctx context.Context, questionID, answerID id.ID) error
+	GetPracticeQuestionAnswer(ctx context.Context, questionID id.ID) (*platformedges.UserAnsweredQuestionEdge, error)
+	SetStatusForQuestionNeedsRefactoring(ctx context.Context, questionID id.ID, isCorrect bool) (*platformedges.UserAnsweredQuestionEdge, error)
+	GenerateQuestionsForSkills(ctx context.Context, input GenerateQuestionsForSkillsInput) (map[id.ID][]id.ID, error)
+	GenerateActionableQuestions(ctx context.Context, input GenerateActionableQuestionsInput) ([]id.ID, error)
+	GetSpanningQuestionSetsForSkills(ctx context.Context, inputs []*SpanningQuestionSetsInput) ([]SkillQuestionSet, error)
+	GetQuestionsForSkill(ctx context.Context, skillID id.ID, ignoredQuestions []id.ID, types []questiontype.QuestionType) ([]question.Question, error)
+	GetBrainTeaserQuestionsForSkill(ctx context.Context, skillIDs []id.ID, ignoredQuestions []id.ID) ([]question.Question, error)
+	GetQuestionsForPrompt(ctx context.Context, input GetQuestionsForPromptInput) ([]PromptQuestion, error)
+	CreateUserQuestion(ctx context.Context, input CreateUserQuestionInput) (id.ID, error)
+	UpdateQuillDocument(ctx context.Context, nodeID id.ID, quillDocument string) (id.ID, error)
+	GetQuillDocument(ctx context.Context, nodeID id.ID) ([]types.QuillDelta, error)
+	GetOriginalQuestionID(ctx context.Context, questionID id.ID) (*id.ID, error)
+}
+
+type GenerateQuestionsForSkillsInput struct {
+	UserID        string
+	SkillIDs      []id.ID
+	QuestionCount int64
+}
+
+type GenerateActionableQuestionsInput struct {
+	BaseUserID    id.ID
+	SkillIDs      []id.ID
+	UserIDs       []id.ID
+	QuestionCount int64
+}
+
+type SkillQuestion struct {
+	ID            id.ID                          `json:"id"`
+	Difficulty    question.QuestionDifficulty    `json:"difficulty"`
+	PracticePhase question.QuestionPracticePhase `json:"practicePhase,omitempty"`
+	Type          question.SkillQuestionType     `json:"type"`
+}
+
+type SkillQuestionSet struct {
+	SelectedQuestionGroupIDs []id.ID         `json:"selectedQuestionGroupIDs"`
+	TeacherQuestions         []SkillQuestion `json:"teacherQuestions"`
+	StudentQuestions         []SkillQuestion `json:"studentQuestions"`
+	BrainTeaserQuestions     []SkillQuestion `json:"brainTeaserQuestions"`
+}
+
+type SpanningQuestionSetsInput struct {
+	UserID                           id.ID                         `json:"userID"`
+	NetworkID                        id.ID                         `json:"networkID"`
+	SkillID                          id.ID                         `json:"skillID"`
+	StudentQuestionsCount            *int                          `json:"studentQuestionsCount"`
+	StudentQuestionConfiguration     *StudentQuestionConfiguration `json:"studentQuestionConfiguration"`
+	AverageStudentQuestionDifficulty *float64                      `json:"averageStudentQuestionDifficulty"`
+	MinDifficulty                    *int                          `json:"minDifficulty"`
+	MaxDifficulty                    *int                          `json:"maxDifficulty"`
+	IncludeTeacherQuestions          bool                          `json:"includeTeacherQuestions"`
+	IgnoredQuestionIDs               []id.ID                       `json:"ignoredQuestionIds"` // not comparable: slices can't be used as Dataloader keys
+	IncludeBrainTeaserQuestions      bool                          `json:"includeBrainTeaserQuestions"`
+}
+
+type StudentQuestionConfiguration struct {
+	MultiChoiceQuestionCount int64 `json:"multiChoiceQuestionCount"`
+	ShortAnswerQuestionCount int64 `json:"shortAnswerQuestionCount"`
+	OpenEndedQuestionCount   int64 `json:"openEndedQuestionCount"`
+}
+
+type CreateUserQuestionInput struct {
+	BaseQuestionID *id.ID
+	QuestionQuill  string
+	Answers        []UserAnswer
+	Type           *string
+	Difficulty     *question.QuestionDifficulty
+}
+
+type UserAnswer struct {
+	QuillDocument string `json:"quillDocument"`
+	IsCorrect     bool   `json:"isCorrect"`
+}
+
+type GetQuestionsForPromptInput struct {
+	SkillIDs           []id.ID
+	QuestionCount      int32
+	Randomize          bool
+	QuestionTypeFilter []PromptQuestionType
+	DifficultyFilter   []question.QuestionDifficulty
+}
+
+type PromptQuestionType string
+
+const (
+	PromptQuestionTypeShortAnswer PromptQuestionType = "SHORT_ANSWER"
+	PromptQuestionTypeMultiChoice PromptQuestionType = "MULTI_CHOICE"
+	PromptQuestionTypeOpenEnded   PromptQuestionType = "OPEN_ENDED"
+)
+
+type PromptQuestion struct {
+	SkillID      id.ID              `json:"skillID"`
+	QuestionText string             `json:"questionText"`
+	Difficulty   string             `json:"difficulty"`
+	QuestionType PromptQuestionType `json:"questionType"`
+	Answers      []AnswerOption     `json:"answers"`
+}
+
+type AnswerOption struct {
+	Content   string `json:"content"`
+	IsCorrect bool   `json:"isCorrect"`
+}
+
+// api/platform/question_group/repository.go
+package platformquestiongroup
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+
+	platformedges "github.com/MathGaps/learning/v2/api/platform/edges"
+)
+
+type Repository interface {
+	TagQuestionGroup(ctx context.Context, questionGroupID id.ID, tag platformedges.QuestionGroupTag) (*platformedges.UserTaggedQuestionGroupEdge, error)
+	GetQuestionGroupTags(ctx context.Context, skillID id.ID, options *edge.GetAllEdgeOptions) ([]*platformedges.UserTaggedQuestionGroupEdge, error)
+	ResetQuestionGroup(ctx context.Context, questionGroupID id.ID) (bool, error)
+}
+
+// api/platform/skill/repository.go
+package platformskill
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+
+	"github.com/MathGaps/learning/v2/api/content/skill"
+	"github.com/MathGaps/learning/v2/api/platform"
+	platformedges "github.com/MathGaps/learning/v2/api/platform/edges"
+	platformsubtopic "github.com/MathGaps/learning/v2/api/platform/subtopic"
+)
+
+type Repository interface {
+	IsFlagged(ctx context.Context, skillID id.ID) (bool, error)
+	IsTaught(ctx context.Context, skillID id.ID) (bool, error)
+	GetSkillResult(ctx context.Context, skillID id.ID) (skill.SkillResult, error)
+	GetHeaderText(ctx context.Context, skillID, topicID, subtopicID id.ID) ([]string, error)
+	GetHeaderTextForYear(ctx context.Context, input HeaderTextForYearInput) ([]string, error)
+	TeachSkill(ctx context.Context, skillID id.ID) (*platformedges.UserTaughtSkillEdge, error)
+	UnteachSkill(ctx context.Context, skillID id.ID) (*platformedges.UserTaughtSkillEdge, error)
+	FlagSkill(ctx context.Context, skillID id.ID) (*platformedges.UserFlaggedSkillEdge, error)
+	UnflagSkill(ctx context.Context, skillID id.ID) (*platformedges.UserFlaggedSkillEdge, error)
+	ComputeProgress(ctx context.Context, skillID id.ID) (*platform.Progress, error)
+	ComputeProgressForSkills(ctx context.Context, skillIDs []id.ID) (map[id.ID]platform.Progress, error)
+	ComputeProgressForSkillsByUser(ctx context.Context, inputs []SkillProgressByUserInput) (UserSkillProgressMap, error)
+	OverallComprehension(ctx context.Context, input OverallComprehensionInput) (UserProgressMap, error)
+	GetCurriculumMetadata(ctx context.Context, skillID id.ID, curriculumID *id.ID) (*platformsubtopic.CurriculumMetadata, error)
+	GetCurriculumMetadataForSkills(ctx context.Context, skillIDs []id.ID) (*platformsubtopic.CurriculumMetadata, error)
+	TaughtForUser(ctx context.Context, skillID id.ID) (bool, error)
+}
+
+type UserSkillProgressMap map[id.ID]map[id.ID]platform.Progress
+
+type UserProgressMap map[id.ID]*platform.Progress
+
+type OverallComprehensionInput struct {
+	BaseUserID id.ID
+	UserIDs    []id.ID
+}
+
+type SkillProgressByUserInput struct {
+	UserID   id.ID
+	SkillIDs []id.ID
+}
+
+type HeaderTextForYearInput struct {
+	SkillID    id.ID `json:"skillID"`
+	SubtopicID id.ID `json:"subtopicID"`
+	TopicID    id.ID `json:"topicID"`
+	YearID     id.ID `json:"yearID"`
+}
+
+// api/platform/stream/repository.go
+package platformstream
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+
+	"github.com/MathGaps/learning/v2/api/content/stream"
+)
+
+type StreamBySubjectInput struct {
+	CourseID id.ID `json:"courseID"`
+	YearID   id.ID `json:"yearID"`
+}
+
+type Repository interface {
+	GetStreamBySubject(ctx context.Context, subjectID id.ID, input StreamBySubjectInput) ([]*stream.Stream, error)
+}
+
+// api/platform/subject/repository.go
+package platformsubject
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/core/pkg/domain/types"
+
+	"github.com/MathGaps/learning/v2/api/content/subject"
+)
+
+type Repository interface {
+	GetStudentSubjects(ctx context.Context) ([]*subject.Subject, error)
+	CreateNonListedSubject(ctx context.Context, input CreateNonListedSubjectInput) (*NonListedSubjectData, error)
+}
+
+type CreateNonListedSubjectInput struct {
+	Title       string           `json:"title"`
+	IconURL     string           `json:"iconURL"`
+	Color       string           `json:"color"`
+	IsTemporary bool             `json:"isTemporary"`
+	Range       *types.TimeRange `json:"range"`
+}
+
+type NonListedSubjectData struct {
+	NetworkID id.ID `json:"networkID"`
+	CourseID  id.ID `json:"courseID"`
+	SubjectID id.ID `json:"subjectID"`
+}
+
+// api/platform/subtopic/helpers.go
+package platformsubtopic
+
+import (
+	"context"
+
+	learningv1 "buf.build/gen/go/tutero/learning/protocolbuffers/go/v1/learning"
+	"github.com/samber/oops"
+
+	platformedges "github.com/MathGaps/learning/v2/api/platform/edges"
+)
+
+var enumToSubtopicStateMap = map[learningv1.SubtopicState]platformedges.SubtopicState{
+	learningv1.SubtopicState_SUBTOPIC_STATE_COMPLETE:           platformedges.SubtopicStateComplete,
+	learningv1.SubtopicState_SUBTOPIC_STATE_TEACHING:           platformedges.SubtopicStateTeaching,
+	learningv1.SubtopicState_SUBTOPIC_STATE_RETURN_LATER:       platformedges.SubtopicStateReturnLater,
+	learningv1.SubtopicState_SUBTOPIC_STATE_READY_TO_TEACH:     platformedges.SubtopicStateReadyToTeach,
+	learningv1.SubtopicState_SUBTOPIC_STATE_LESSON_NOT_PLANNED: platformedges.SubtopicStateLessonNotPlanned,
+	learningv1.SubtopicState_SUBTOPIC_STATE_PROCESSING:         platformedges.SubtopicStateProcessing,
+}
+
+func GetEnumFromSubtopicState(ctx context.Context, state platformedges.SubtopicState) (learningv1.SubtopicState, error) {
+	for key, val := range enumToSubtopicStateMap {
+		if state == val {
+			return key, nil
+		}
+	}
+	return -1, oops.
+		With("state", string(state)).
+		New("invalid subtopic state")
+}
+
+func GetSubtopicStateFromEnum(ctx context.Context, enum learningv1.SubtopicState) (platformedges.SubtopicState, error) {
+	subtopicState, ok := enumToSubtopicStateMap[enum]
+	if !ok {
+		return "", oops.
+			With("enum", enum.String()).
+			New("invalid enum")
+	}
+	return subtopicState, nil
+}
+
+// api/platform/subtopic/repository.go
+package platformsubtopic
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+
+	"github.com/MathGaps/learning/v2/api/content/curriculum"
+	"github.com/MathGaps/learning/v2/api/content/skill"
+	"github.com/MathGaps/learning/v2/api/content/subtopic"
+	"github.com/MathGaps/learning/v2/api/platform"
+	platformedges "github.com/MathGaps/learning/v2/api/platform/edges"
+)
+
+type Repository interface {
+	AddComment(ctx context.Context, subtopicID id.ID, input SubtopicCommentInput) (*platformedges.UserCommentedOnSubtopicEdge, error)
+	RemoveComment(ctx context.Context, subtopicID, commentID id.ID) error
+	GetComments(ctx context.Context, subtopicID id.ID) ([]*platformedges.UserCommentedOnSubtopicEdge, error)
+
+	GetSkillsForUser(ctx context.Context, input SkillsForUserInput) ([]*skill.Skill, error)
+	GetSkillsForYear(ctx context.Context, subtopicID, yearID id.ID, class bool) ([]*skill.Skill, error)
+	GetFlaggedSkills(ctx context.Context, subtopicID id.ID) (int, error)
+	GetTaughtSkills(ctx context.Context, subtopicID id.ID) (int, error)
+	GetTotalSkills(ctx context.Context, subtopicID id.ID, class bool) (int, error)
+	GetState(ctx context.Context, subtopicID id.ID) (platformedges.SubtopicState, error)
+	SetState(ctx context.Context, subtopicID id.ID, state platformedges.SubtopicState) (*platformedges.UserHasStateSubtopicEdge, error)
+	ComputeSkillIds(ctx context.Context, subtopicID id.ID, class bool) ([]id.ID, error)
+	ComputeSkillIdsForSubtopics(ctx context.Context, subtopicIDs []id.ID) (map[id.ID][]id.ID, error)
+	ComputeProgress(ctx context.Context, subtopicID id.ID) (*platform.Progress, error)
+	ComputeProgressForSubtopics(ctx context.Context, subtopicIDs []id.ID) (map[id.ID]*platform.Progress, error)
+	ComputeProgressForSubtopicsByUser(ctx context.Context, inputs []SubtopicProgressbyUserInput) (UserSubtopicProgressMap, error)
+	GetInducedSubgraph(ctx context.Context, subtopicIDs []id.ID) (map[id.ID][]id.ID, error)
+	GetSubstrandsForUser(ctx context.Context, subtopicID id.ID) ([]*curriculum.Substrand, error)
+	GetCurriculumMetadata(ctx context.Context, subtopicID id.ID) (*CurriculumMetadata, error)
+	GetCurriculumMetadatas(ctx context.Context, subtopicIDs []id.ID) ([]*CurriculumMetadata, error)
+	RelevantSubtopicsForSkill(ctx context.Context, skillID id.ID) ([]*subtopic.Subtopic, error)
+}
+
+type UserSubtopicProgressMap map[id.ID]map[id.ID]*platform.Progress
+
+type SubtopicCommentInput struct {
+	Comment string
+}
+
+type SkillsForUserInput struct {
+	TopicID    *id.ID `json:"topicID"`
+	SubtopicID id.ID  `json:"subtopicID"`
+	Class      bool   `json:"class"`
+	Base       *bool  `json:"base"`
+	YearID     *id.ID `json:"yearID"`
+}
+
+type SkillsForUserOptions struct {
+	YearID    *id.ID
+	NetworkID id.ID
+	Base      *bool
+	UserID    id.ID
+}
+
+type SubtopicProgressbyUserInput struct {
+	UserID      id.ID
+	SubtopicIDs []id.ID
+}
+
+type CurriculumMetadata struct {
+	CurriculumID id.ID               `json:"curriculumId"`
+	Contents     []CurriculumContent `json:"contents"`
+}
+
+type CurriculumContent struct {
+	ContentDescription string  `json:"contentDescription"`
+	Code               string  `json:"code"`
+	Skills             []id.ID `json:"skills"`
+	ReferenceURL       string  `json:"referenceUrl"`
+}
+
+// api/platform/topic/repository.go
+package platformtopic
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+
+	"github.com/MathGaps/learning/v2/api/content/subtopic"
+	"github.com/MathGaps/learning/v2/api/content/topic"
+	"github.com/MathGaps/learning/v2/api/platform"
+	platformsubtopic "github.com/MathGaps/learning/v2/api/platform/subtopic"
+)
+
+type Repository interface {
+	BaseTopicsForUsers(ctx context.Context, options BaseTopicsForUsersOptions) ([]topic.BaseTopic, error)
+	BaseTopicsForYear(ctx context.Context, yearID id.ID) ([]topic.BaseTopic, error)
+	SubtopicsForUser(ctx context.Context, topicID id.ID, options SubtopicForUserOptions) ([]*subtopic.Subtopic, error)
+	ComputeProgress(ctx context.Context, topicID id.ID) (*platform.Progress, error)
+	GetSubtopicBank(ctx context.Context, baseTopicID id.ID, class bool) ([]*subtopic.Subtopic, error)
+	SelectSubtopicsForClass(ctx context.Context, classID, topicID id.ID, subtopicIDs []id.ID) ([]*subtopic.Subtopic, error)
+	GetCurriculumMetadata(ctx context.Context, topicID id.ID, class bool) (*platformsubtopic.CurriculumMetadata, error)
+	DiagnosedSubtopicsForClass(ctx context.Context, withAssessment bool, input DiagnosedSubtopicsInput) ([]*subtopic.Subtopic, error)
+	RelevantTopicsForSubtopic(ctx context.Context, subtopicID id.ID) ([]topic.BaseTopic, error)
+}
+
+type BaseTopicsForUsersOptions struct {
+	WithLessonPlan *bool
+	YearID         *id.ID
+}
+
+type SubtopicForUserOptions struct {
+	Class                   bool
+	ClassID                 *id.ID
+	WithLessonPlan          *bool
+	WithAssessment          *bool
+	WithIndirectLessonPlans bool
+	YearID                  *id.ID
+}
+
+type SubtopicProgress struct {
+	SubtopicID id.ID             `json:"subtopicID"`
+	Progress   platform.Progress `json:"progress"`
+}
+
+type DiagnosedSubtopicsInput struct {
+	Class     bool
+	ClassID   *id.ID
+	UserID    id.ID
+	Subtopics []*subtopic.Subtopic
+}
+
+// api/platform/user/entity.go
+package user
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/node"
+)
+
+type User struct {
+	node.Node `neo4j:"User,id:user"`
+	UUID      string `json:"uuid" neo4j:"optional"`
+}
+
+type NetworkIdentifier struct {
+	NetworkID id.ID `json:"networkID"`
+	CourseID  id.ID `json:"courseID"`
+}
+
+func (NetworkIdentifier) IsEntity() {}
+
+// api/platform/user/repository.go
+package user
+
+import (
+	"context"
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/repository"
+
+	"github.com/MathGaps/learning/v2/api/content/course"
+	"github.com/MathGaps/learning/v2/api/content/curriculum"
+	"github.com/MathGaps/learning/v2/api/content/region"
+	"github.com/MathGaps/learning/v2/api/content/stream"
+	"github.com/MathGaps/learning/v2/api/content/year"
+	platformedges "github.com/MathGaps/learning/v2/api/platform/edges"
+)
+
+type Repository interface {
+	repository.CRUDRepository[User]
+	GetUser(ctx context.Context) (*User, error)
+	GetYear(ctx context.Context, userID id.ID) (*year.Year, error)
+	GetRegion(ctx context.Context, userID id.ID) (*region.Region, error)
+	GetAllUserRegions(ctx context.Context, userIDs []string) ([]*region.Region, error)
+	GetCourse(ctx context.Context, userID id.ID) (*course.Course, error)
+	GetCurriculum(ctx context.Context) (*curriculum.Curriculum, error)
+	StartStudyingNetwork(ctx context.Context, input StudyNetworkInput) (*platformedges.UserStudiesNetworkEdge, error)
+	StopStudyingNetwork(ctx context.Context, input StudyNetworkInput) (*platformedges.UserStudiesNetworkEdge, error)
+	StudyDifferentNetwork(ctx context.Context, input StudyDifferentNetworkInput) (*platformedges.UserStudiesNetworkEdge, error)
+	StudyDifferentNetworkForUsers(ctx context.Context, userIDs []id.ID, input StudyDifferentNetworkInput) (map[id.ID]*platformedges.UserStudiesNetworkEdge, error)
+	StudyInYear(ctx context.Context, yearID id.ID) (*platformedges.UserStudiesInYearEdge, error)
+	StudyInRegion(ctx context.Context, regionID id.ID) (*platformedges.UserStudiesInRegionEdge, error)
+	StudyCourse(ctx context.Context, courseID id.ID) (*platformedges.UserStudiesCourseEdge, error)
+	TeachInRegion(ctx context.Context, regionID id.ID) (*platformedges.UserTeachesInRegionEdge, error)
+	GetNetworkIdentifiers(ctx context.Context) ([]*NetworkIdentifier, error)
+	GetHomeworkProgress(ctx context.Context, from, to time.Time, subjectID *string) (*HomeworkProgress, error)
+	GetStream(ctx context.Context, networkIdentifier *NetworkIdentifier) (*stream.Stream, error)
+	EvictUserMathsNetworkCache(ctx context.Context, userIDs []id.ID) error
+	GetYearsForUsers(ctx context.Context, userIDs []id.ID) (map[id.ID]*year.Year, error)
+	SetupUser(ctx context.Context, input SetupUserInput) (*User, error)
+	StudyPTo10Network(ctx context.Context, networkID id.ID) (*platformedges.UserStudiesNetworkEdge, error)
+	StudyCurriculum(ctx context.Context, curriculumID id.ID) (*platformedges.UserStudiesCurriculumEdge, error)
+	TransferCurriculumToClass(ctx context.Context, input TransferCurriculumToClassInput) error
+	MigrateUser(ctx context.Context, userID, newID id.ID) (err error)
+	SetupAdminUser(ctx context.Context, userID id.ID) (*User, error)
+	GetUsersByRegionYear(ctx context.Context, input GetUsersByRegionYearInput) ([]*User, error)
+	UpdateUsersInGroup(ctx context.Context, input UpdateUsersInGroupInput) (bool, error)
+	UpdateUserIndicatorVector(ctx context.Context, userID id.ID, skillIndices []int, networkIndex, curriculumIndex int) error
+	GetYearsForCurriculum(ctx context.Context) ([]*year.Year, error)
+}
+
+type SetupUserInput struct {
+	UserID             id.ID
+	CourseID           id.ID
+	YearID             id.ID
+	NetworkID          id.ID
+	RegionID           id.ID
+	CurriculumID       *id.ID
+	GroupID            *id.ID
+	SkipLinkingNetwork bool
+}
+
+type StudyNetworkInput struct {
+	NetworkID id.ID `json:"networkID"`
+	CourseID  id.ID `json:"courseID"`
+}
+
+type StudyDifferentNetworkInput struct {
+	Old        StudyNetworkInput `json:"oldNetwork"`
+	New        StudyNetworkInput `json:"newNetwork"`
+	UpdateYear bool              `json:"updateYear"`
+}
+
+type HomeworkProgress struct {
+	Complete int `json:"complete"`
+	Total    int `json:"total"`
+}
+
+type UserType string
+
+const (
+	UserTypeStudent UserType = "student"
+	UserTypeTutor   UserType = "tutor"
+)
+
+type GetUsersByRegionYearInput struct {
+	RegionID *id.ID
+	UserType UserType
+	YearID   *id.ID
+}
+
+type TransferCurriculumToClassInput struct {
+	ClassID      id.ID
+	CurriculumID *id.ID
+}
+
+type UpdateUsersInGroupInput struct {
+	GroupUserID id.ID   `json:"groupUserID"`
+	UserIDs     []id.ID `json:"userIDs"`
+}
+
+// api/platform/whiteboard_template/entity.go
+package platformwhiteboardtemplate
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type WhiteboardTemplateDoc struct {
+	ID       id.ID          `firestore:"id"`
+	Template map[string]any `firestore:"template"`
+	Context  string         `firestore:"context"`
+}
+
+type SkillWhiteboardTemplate struct {
+	ID         id.ID   `firestore:"id"`
+	SkillID    string  `firestore:"skillId"`
+	TemplateID *string `firestore:"templateId"`
+	CreatedAt  string  `firestore:"createdAt"`
+}
+
+type GeneralWhiteboardTemplate struct {
+	ID      id.ID          `firestore:"id"`
+	Name    string         `firestore:"name"`
+	IconMap map[string]any `firestore:"iconMap"`
+}
+
+// api/platform/whiteboard_template/repository.go
+package platformwhiteboardtemplate
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type Repository interface {
+	GetWhiteboardTemplate(ctx context.Context, id id.ID) (template map[string]any, ready bool, err error)
+	GetSkillsTemplatesMap(ctx context.Context, skillIDs []id.ID) (map[id.ID][]*SkillWhiteboardTemplate, error)
+	GetGeneralTemplate(ctx context.Context, id id.ID) (*GeneralWhiteboardTemplate, error)
+}
+
+// api/platform/whiteboard_template/whiteboard_templates.go
+package platformwhiteboardtemplate
+
+import "github.com/MathGaps/learning/v2/internal/helpers"
+
+const (
+	ApplicationNodeTemplate = `
+{
+  "objects": [
+    {
+      "id": 1044387226,
+      "x": 600,
+      "y": 0,
+      "type": "mask",
+      "image": {
+        "id": 1044387226,
+        "x": 600,
+        "y": 0,
+        "type": "file",
+        "fileType": "image",
+        "properties": {
+          "propertyType": "image",
+          "fit": "cover",
+          "alignment": null
+        },
+        "imageSize": null,
+        "size": [
+          360,
+          540
+        ],
+        "image": true,
+        "url": "{{ .ImageURL }}",
+        "localFile": null
+      },
+      "size": [
+        360,
+        540
+      ]
+    },
+    {
+      "id": 660742962,
+      "x": 24,
+      "y": 24,
+      "type": "text",
+      "properties": {
+        "type": "text",
+        "objectSize": [
+          560,
+          268
+        ],
+        "editorType": "quill",
+				"delta": [
+	        {{ range $index, $element := .QuillData.Delta }}
+            {{ if $index }},{{ end }}
+            {{ $element | toJSON }}
+	        {{ end }}
+        ]
+      }
+    }
+  ],
+  "canvasData": {
+    "constraintSize": [
+      2122,
+      1142
+    ],
+    "canvasSize": [
+      960,
+      540
+    ],
+    "translateX": 153.7688266196743,
+    "translateY": 55.60747663551401,
+    "scale": 1.7969705882352942,
+    "scaleEnabled": false,
+    "panEnabled": false
+  }
+}
+`
+
+	MathsDebateTemplate = `{
+  "objects": [
+    {
+      "id": 747192358,
+      "x": 0,
+      "y": 0,
+      "type": "mask",
+      "image": {
+        "id": 747192358,
+        "x": 0,
+        "y": 0,
+        "type": "file",
+        "fileType": "image",
+        "properties": {
+          "propertyType": "image",
+          "fit": "cover",
+          "alignment": null
+        },
+        "imageSize": null,
+        "size": [
+          960,
+          170
+        ],
+        "image": true,
+        "url": "{{ .ImageURL }}",
+        "localFile": null
+      },
+      "size": [
+        960,
+        170
+      ]
+    },
+    {
+      "id": 116376109,
+      "x": 30,
+      "y": 180,
+      "type": "text",
+      "properties": {
+        "type": "text",
+        "objectSize": [
+          900,
+          1080
+        ],
+        "editorType": "quill",
+				"delta": [
+	        {{ range $index, $element := .QuillData.Delta }}
+            {{ if $index }},{{ end }}
+            {{ $element | toJSON }}
+	        {{ end }}
+        ]
+			}
+		}
+	],
+	"canvasData": {
+    "constraintSize": [
+      1646,
+      912
+    ],
+    "canvasSize": [
+      960,
+      1080
+    ],
+    "translateX": 622.9429824560415,
+    "translateY": 55.60747663551402,
+    "scale": 0.7998688524590165,
+    "scaleEnabled": false,
+    "panEnabled": true
+  }
+}`
+
+	BrainTeaserTemplate = `{
+	"objects": [
+		{
+			"id": 747192358,
+			"x": 0,
+			"y": 0,
+			"type": "mask",
+			"image": {
+				"id": 747192358,
+				"x": 0,
+				"y": 0,
+				"type": "file",
+				"fileType": "image",
+				"properties": {
+					"propertyType": "image", 
+					"fit": "cover"
+				},
+				"size": [
+					960,
+					170
+				],
+				"image": true,
+				"url": "{{ .ImageURL }}",
+				"localFile": null
+			},
+			"size": [
+				960,
+				170
+			]
+		},
+		{
+			"id": 116376109,
+			"x": 30,
+			"y": 180,
+			"type": "text",
+			"properties": {
+				"type": "text",
+        "objectSize": [
+          900,
+          1080
+        ],
+				"editorType": "quill",
+				"delta": [
+	        {{ range $index, $element := .QuillData.Delta }}
+            {{ if $index }},{{ end }}
+            {{ $element | toJSON }}
+	        {{ end }}
+        ]
+			}
+		}
+	],
+	"canvasData": {
+		"constraintSize": [
+			1646,
+			912
+		],
+		"canvasSize": [
+			960,
+			1080
+		],
+		"translateX": 622.9429824560415,
+		"translateY": 55.60747663551402,
+		"scale": 0.7998688524590165,
+		"scaleEnabled": false,
+		"panEnabled": true
+	}
+}`
+)
+
+type (
+	WhiteboardTemplateValues struct {
+		ImageURL  string
+		QuillData helpers.QuillEditorData
+	}
+)
+
+// api/platform/year/repository.go
+package platformyear
+
+import (
+	"context"
+
+	"github.com/MathGaps/learning/v2/api/content/year"
+)
+
+type Repository interface {
+	GetUserYear(ctx context.Context) (*year.Year, error)
+	GetUserYearWithFallback(ctx context.Context) (*year.Year, error)
+}
+

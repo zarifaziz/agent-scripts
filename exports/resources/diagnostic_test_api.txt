@@ -1,0 +1,70 @@
+// api/diagnostic_test/entity.go
+package diagnostictest
+
+import (
+	"time"
+
+	"github.com/rlch/neogo"
+)
+
+type DiagnosticTest struct {
+	neogo.Node `neo4j:"DiagnosticTest,id:test"`
+	CreatedAt  time.Time `json:"createdAt"`
+
+	SessionID *string `json:"-"`
+}
+
+func (DiagnosticTest) IsEntity() {}
+
+type DiagnosticTestAnsweredQuestions struct {
+	TestID    string              `json:"testID"`
+	StudentID string              `json:"studentID"`
+	Questions []*AnsweredQuestion `json:"questions"`
+}
+
+type AnsweredQuestion struct {
+	QuestionID string        `json:"questionID"`
+	Answer     string        `json:"answer"`
+	TimeTaken  time.Duration `json:"timeTaken"`
+	Result     bool          `json:"result"`
+}
+
+// api/diagnostic_test/repository.go
+package diagnostictest
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/MathGaps/core/pkg/broadcast"
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/user"
+)
+
+type Repository interface {
+	Get(ctx context.Context, id id.ID) (*DiagnosticTest, error)
+	GetUser(ctx context.Context, id id.ID) (*user.User, error)
+	GetAllBySessionID(ctx context.Context, sessionID id.ID) ([]*DiagnosticTest, error)
+	GetAllUserTestIDBySessionID(ctx context.Context, sessionID id.ID) (map[id.ID]id.ID, error)
+	CreateDemo(ctx context.Context, sessionID id.ID) (*DiagnosticTest, error)
+	DeleteDemo(ctx context.Context, testID id.ID) (bool, error)
+	GetAllAnsweredQuestions(ctx context.Context, sessionID id.ID) ([]*DiagnosticTestAnsweredQuestions, error)
+	GetAllAnsweredQuestionsFromKVStore(ctx context.Context, sessionID id.ID) ([]*DiagnosticTestAnsweredQuestions, error)
+	GetActiveTestForStudent(ctx context.Context, studentID id.ID) (*DiagnosticTest, error)
+	GetUpcomingTestsForStudent(ctx context.Context, studentID id.ID) ([]*DiagnosticTest, error)
+
+	// subscrition
+	StudentsReadyForTest(ctx context.Context, classID id.ID) ([]id.ID, error)
+	MarkStudentReadyForDiagnosticTest(ctx context.Context, classID id.ID) error
+}
+
+type ClassStudentsReadyForTestKey struct {
+	ClassID id.ID
+}
+
+func (k ClassStudentsReadyForTestKey) String() string {
+	return fmt.Sprint("class_students_ready_for_test_", k.ClassID)
+}
+
+type StudentsReadyForTestBroadcastMap = broadcast.BroadcasterMap[ClassStudentsReadyForTestKey, []id.ID]
+

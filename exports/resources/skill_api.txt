@@ -1,0 +1,16 @@
+// api/skill/entity.go
+package skill
+
+import (
+	"time"
+
+	"github.com/rlch/neogo"
+)
+
+type Skill struct {
+	neogo.Node `neo4j:"Skill,id:skill"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+func (Skill) IsEntity() {}
+

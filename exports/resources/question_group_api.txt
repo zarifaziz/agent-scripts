@@ -1,0 +1,16 @@
+// api/question_group/entity.go
+package questiongroup
+
+import (
+	"time"
+
+	"github.com/rlch/neogo"
+)
+
+type QuestionGroup struct {
+	neogo.Node `neo4j:"QuestionGroup,id:qg"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+func (QuestionGroup) IsEntity() {}
+

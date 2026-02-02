@@ -1,0 +1,269 @@
+// api/diagnostic_test_session/configuration_repository.go
+package diagnostictestsession
+
+import (
+	"context"
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type DiagnosticTestSessionConfigurationRepository interface {
+	Get(ctx context.Context, configID id.ID) (*DiagnosticTestSessionConfiguration, error)
+	GetByClass(ctx context.Context, classID id.ID) (*DiagnosticTestSessionConfiguration, error)
+	GetByDTS(ctx context.Context, sessionID id.ID) (*DiagnosticTestSessionConfiguration, error)
+	SetDTSConfig(ctx context.Context, sessionID id.ID, options UpdateDiagnosticTestSessionConfigurationInput) (*DiagnosticTestSessionConfiguration, error)
+	SetDTSConfigForClass(ctx context.Context, classID id.ID, options UpdateDiagnosticTestSessionConfigurationInput) (*DiagnosticTestSessionConfiguration, error)
+	RemoveQuestionTimer(ctx context.Context, configID id.ID) (*DiagnosticTestSessionConfiguration, error)
+	RemoveDuration(ctx context.Context, configID id.ID) (*DiagnosticTestSessionConfiguration, error)
+}
+
+type UpdateDiagnosticTestSessionConfigurationInput struct {
+	Duration                  *time.Duration `json:"duration"`
+	NotesAllowed              *bool          `json:"notesAllowed"`
+	AnswersShownAfterQuestion *bool          `json:"answersShownAfterQuestion"`
+	ShowStudentTheirResult    *bool          `json:"showStudentTheirResult"`
+	QuestionTimer             *time.Duration `json:"questionTimer"`
+	CalculatorsAllowed        *[]Calculator  `json:"calculatorsAllowed"`
+}
+
+// api/diagnostic_test_session/edges.go
+package diagnostictestsession
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/neo4j-tooling/v2/pkg/domain/edge"
+)
+
+type DiagnosticTestSessionIncludesDiagnosticTest struct {
+	edge.Edge `neo4j:"INCLUDES"`
+}
+
+type DiagnosticTestSessionHasDiagnosticTestSessionConfiguration struct {
+	edge.Edge `neo4j:"HAS"`
+}
+
+type UserHasDiagnosticTestSessionConfiguration struct {
+	edge.Edge `neo4j:"HAS"`
+}
+
+type DiagnosticTestSessionExaminesBaseTopic struct {
+	edge.Edge `neo4j:"EXAMINES"`
+}
+
+type DiagnosticTestSessionExaminesSubtopic struct {
+	edge.Edge `neo4j:"EXAMINES"`
+}
+
+type DiagnosticTestSessionDiagnosesSkill struct {
+	edge.Edge  `neo4j:"DIAGNOSES"`
+	TopicID    *id.ID `json:"topicID,omitempty" neo4j:"optional"`
+	SubtopicID *id.ID `json:"subtopicID,omitempty" neo4j:"optional"`
+}
+
+type UserCreatedDiagnosticTestSession struct {
+	edge.Edge `neo4j:"CREATED"`
+}
+
+type UserTakingDiagnosticTest struct {
+	edge.Edge `neo4j:"TAKING"`
+}
+
+// api/diagnostic_test_session/entity.go
+package diagnostictestsession
+
+import (
+	"time"
+
+	"github.com/MathGaps/resources/api/resource"
+	"github.com/rlch/neogo"
+)
+
+type (
+	Calculator  string
+	Calculators []Calculator
+)
+
+const (
+	ScientificCalculator Calculator = "SCIENTIFIC"
+	GraphingCalculator   Calculator = "GRAPHING"
+	CASCalculator        Calculator = "CAS"
+)
+
+var (
+	ActiveDiagnosticTestSessionStatus = []resource.DiagnosticTestSessionStatus{
+		resource.DTSessionStatusStarted, resource.DTSessionStatusPaused,
+	}
+	UpcomingDiagnosticTestSessionStatus = []resource.DiagnosticTestSessionStatus{
+		resource.DTSessionStatusCreated,
+	}
+	PastDiagnosticTestSessionStatus = []resource.DiagnosticTestSessionStatus{
+		resource.DTSessionStatusFinished,
+	}
+)
+
+type DiagnosticTestSessionConfiguration struct {
+	neogo.Node                `neo4j:"DiagnosticTestSessionConfiguration"`
+	CreatedAt                 time.Time      `neo4j:"createdAt"`
+	Duration                  *time.Duration `json:"duration"`
+	NotesAllowed              bool           `json:"notesAllowed"`
+	AnswersShownAfterQuestion bool           `json:"answersShownAfterQuestion"`
+	ShowStudentsTheirResult   bool           `json:"showStudentsTheirResult"`
+	QuestionTimer             *time.Duration `json:"questionTimer"`
+	CalculatorsAllowed        Calculators    `json:"calculatorsAllowed"`
+}
+
+func (DiagnosticTestSessionConfiguration) IsEntity() {}
+
+// api/diagnostic_test_session/repository.go
+package diagnostictestsession
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/MathGaps/resources/api/class"
+	"github.com/MathGaps/resources/api/common"
+	"github.com/MathGaps/resources/api/resource"
+	"github.com/MathGaps/resources/api/skill"
+	"github.com/MathGaps/resources/api/subtopic"
+	"github.com/MathGaps/resources/api/topic"
+	"github.com/MathGaps/resources/api/user"
+)
+
+type Repository interface {
+	Get(ctx context.Context, id id.ID) (*resource.DiagnosticTestSession, error)
+	GetByIDs(ctx context.Context, ids []id.ID) ([]*resource.DiagnosticTestSession, error)
+	Create(ctx context.Context, classID *id.ID, options CreateDiagnosticTestSessionInput) (*resource.DiagnosticTestSession, error)
+	Update(ctx context.Context, sessionID id.ID, options UpdateDiagnosticTestSessionInput) (*resource.DiagnosticTestSession, error)
+	Start(ctx context.Context, sessionID id.ID) (*resource.DiagnosticTestSession, error)
+	Pause(ctx context.Context, sessionID id.ID) (*resource.DiagnosticTestSession, error)
+	Resume(ctx context.Context, sessionID id.ID) (*resource.DiagnosticTestSession, error)
+	Finish(ctx context.Context, sessionID id.ID) (*resource.DiagnosticTestSession, error)
+	Delete(ctx context.Context, sessionID id.ID) (*resource.DiagnosticTestSession, error)
+	DeleteByIDs(ctx context.Context, sessionIDs []id.ID) ([]*resource.DiagnosticTestSession, error)
+	PercentageCompleted(ctx context.Context, sessionID id.ID) (float64, error)
+
+	GetSessionData(ctx context.Context, sessionID id.ID) (*DiagnosticTestSessionData, error)
+
+	GetTopic(ctx context.Context, sessionID id.ID) (*topic.BaseTopic, error)
+	GetTopics(ctx context.Context, sessionID id.ID) ([]*topic.BaseTopic, error)
+	GetSubtopics(ctx context.Context, sessionID id.ID) ([]*subtopic.Subtopic, error)
+	GetSkills(ctx context.Context, sessionID id.ID) ([]*skill.Skill, error)
+	GetSubtopicSkills(ctx context.Context, sessionID id.ID) (map[id.ID]any, error)
+	GetTopicSkills(ctx context.Context, sessionID id.ID) (map[id.ID]any, error)
+	GetSkillTopology(ctx context.Context, sessionID id.ID) ([]*SkillTopology, error)
+	GetClassUser(ctx context.Context, sessionID id.ID) (*user.User, error)
+	GetClass(ctx context.Context, obj *resource.DiagnosticTestSession) (*class.Class, error)
+
+	GetAllForTopic(ctx context.Context, topicID, classID id.ID, interval *DiagnosticTestSessionInterval) ([]*resource.DiagnosticTestSession, error)
+	GetAllForSubtopic(ctx context.Context, subtopicID, classID id.ID, interval *DiagnosticTestSessionInterval) ([]*resource.DiagnosticTestSession, error)
+	GetAllForClass(ctx context.Context, classID id.ID, interval *DiagnosticTestSessionInterval) ([]*resource.DiagnosticTestSession, error)
+	GetForTest(ctx context.Context, testID id.ID) (*resource.DiagnosticTestSession, error)
+
+	CountAllForClass(ctx context.Context, classID id.ID) (*DiagnosticTestSessionCounts, error)
+	CountAllForTopic(ctx context.Context, classID, topicID id.ID) (*DiagnosticTestSessionCounts, error)
+	CountAllForSubtopic(ctx context.Context, classID, subtopicID id.ID) (*DiagnosticTestSessionCounts, error)
+	CountAllForTopics(ctx context.Context, classID id.ID, topicIDs []id.ID) (map[id.ID]*DiagnosticTestSessionCounts, error)
+	CountAllForSubtopics(ctx context.Context, classID id.ID, subtopicIDs []id.ID) (map[id.ID]*DiagnosticTestSessionCounts, error)
+	CountAllForSkill(ctx context.Context, classID, skillID id.ID) (*DiagnosticTestSessionCounts, error)
+
+	HasAssessmentForTopic(ctx context.Context, classID, topicID id.ID, interval *DiagnosticTestSessionInterval) (bool, error)
+	HasAssessmentForSubtopic(ctx context.Context, classID, subtopicID id.ID, interval *DiagnosticTestSessionInterval) (bool, error)
+	HasAssessmentForTopics(ctx context.Context, classID id.ID, topicIDs []id.ID, interval *DiagnosticTestSessionInterval) (map[id.ID]bool, error)
+	HasAssessmentForSubtopics(ctx context.Context, classID id.ID, subtopicIDs []id.ID, interval *DiagnosticTestSessionInterval) (map[id.ID]bool, error)
+
+	AddStudents(ctx context.Context, classID id.ID, studentIDs []id.ID, session *resource.DiagnosticTestSession) ([]id.ID, error)
+	RemoveStudents(ctx context.Context, classID id.ID, studentIDs []id.ID, session *resource.DiagnosticTestSession) error
+	GetActiveForClass(ctx context.Context, classID id.ID) (*resource.DiagnosticTestSession, error)
+	GetSessionSubtopicProgressesForStudents(ctx context.Context, sessionID id.ID, testIDs []id.ID) (map[id.ID]map[id.ID]*common.Progress, error)
+	GetSessionSubtopicSkills(ctx context.Context, sessionID id.ID) (map[id.ID][]id.ID, error)
+	GetProgress(ctx context.Context, sessionID id.ID) (*common.Progress, error)
+	GetStudentProgresses(ctx context.Context, sessionID id.ID) ([]*StudentProgress, error)
+	TransferDiagnosticTestSessionToClass(ctx context.Context, teacherID, classID id.ID) error
+	CreateForFutureClass(ctx context.Context, options CreateDiagnosticTestSessionInput) (*resource.DiagnosticTestSession, error)
+	DuplicateTestSessionToClass(ctx context.Context, sessionID id.ID, classID id.ID, folderID id.ID) (*resource.DiagnosticTestSession, error)
+	GetStudentYearLevels(ctx context.Context, sessionID id.ID) (map[string]any, error)
+}
+
+type CreateDiagnosticTestSessionInput struct {
+	DueDate        time.Time                                    `json:"dueDate"`
+	AssessmentType resource.DiagnosticTestSessionAssessmentType `json:"assessmentType"`
+
+	Duration                  *time.Duration `json:"duration"`
+	NotesAllowed              bool           `json:"notesAllowed"`
+	AnswersShownAfterQuestion bool           `json:"answersShownAfterQuestion"`
+	ShowStudentTheirResult    bool           `json:"showStudentTheirResult"`
+	QuestionTimer             *time.Duration `json:"questionTimer"`
+	CalculatorsAllowed        []Calculator   `json:"calculatorsAllowed"`
+	FolderID                  id.ID          `json:"folderID"`
+
+	SessionInputIDs
+
+	Name string `json:"name"`
+}
+
+type UpdateDiagnosticTestSessionInput struct {
+	Name    *string    `json:"name"`
+	DueDate *time.Time `json:"dueDate"`
+
+	Duration *time.Duration `json:"duration"`
+
+	SessionInputIDs
+}
+
+type SkillTopology struct {
+	TopicID    *id.ID `json:"topicID,omitempty"`
+	SubtopicID *id.ID `json:"subtopicID,omitempty"`
+	SkillID    id.ID  `json:"skillID"`
+}
+
+type SessionInputIDs struct {
+	SkillTopology []*SkillTopology `json:"skillTopology"`
+
+	// Deprecated
+	TopicID     id.ID   `json:"topicID"`
+	TopicIDs    []id.ID `json:"topicIDs"`
+	SubtopicIDs []id.ID `json:"subtopicIDs"`
+	SkillIDs    []id.ID `json:"skillIDs"`
+}
+
+type DiagnosticTestSessionCounts struct {
+	Active   int `json:"active"`
+	Upcoming int `json:"upcoming"`
+	Past     int `json:"past"`
+}
+
+type DiagnosticTestSessionData struct {
+	DiagnosticTestSession resource.DiagnosticTestSession
+	Configuration         DiagnosticTestSessionConfiguration
+	UserID                id.ID
+	TopicIDs              []id.ID
+	SubtopicIDs           []id.ID
+	SkillIDs              []id.ID
+	TestStudentID         map[string]string
+}
+
+type StudentProgress struct {
+	StudentID string           `json:"studentID"`
+	Progress  *common.Progress `json:"progress"`
+}
+
+type DiagnosticTestSessionInterval string
+
+const (
+	DiagnosticTestSessionIntervalUpcoming DiagnosticTestSessionInterval = "UPCOMING"
+	DiagnosticTestSessionIntervalActive   DiagnosticTestSessionInterval = "ACTIVE"
+	DiagnosticTestSessionIntervalPast     DiagnosticTestSessionInterval = "PAST"
+)
+
+type DiagnosticTestSessionSubtopicSkillsCacheKey struct {
+	SessionID id.ID
+}
+
+func (k DiagnosticTestSessionSubtopicSkillsCacheKey) String() string {
+	return fmt.Sprintf("diagnostic-test-session-subtopic-skills:%s", k.SessionID)
+}
+

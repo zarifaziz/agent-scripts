@@ -1,0 +1,247 @@
+// api/question/entity.go
+package question
+
+import (
+	"time"
+
+	"buf.build/gen/go/tutero/learning/protocolbuffers/go/v1/learning"
+	"github.com/MathGaps/core/pkg/domain/id"
+	"github.com/rlch/neogo"
+)
+
+type LessonPlanQuestionType string
+
+const (
+	LessonPlanQuestionTypeShortAnswer    LessonPlanQuestionType = "SHORT_ANSWER"
+	LessonPlanQuestionTypeMultipleChoice LessonPlanQuestionType = "MULTIPLE_CHOICE"
+	LessonPlanQuestionTypeOpenEnded      LessonPlanQuestionType = "OPEN_ENDED"
+	LessonPlanQuestionTypeScaffolded     LessonPlanQuestionType = "SCAFFOLDED"
+)
+
+func LearningQuestionFormToLessonPlanQuestionType(t learning.QuestionType) LessonPlanQuestionType {
+	switch t {
+	case learning.QuestionType_QUESTION_TYPE_SHORT:
+		return LessonPlanQuestionTypeShortAnswer
+	case learning.QuestionType_QUESTION_TYPE_MULTI:
+		return LessonPlanQuestionTypeMultipleChoice
+	case learning.QuestionType_QUESTION_TYPE_OPEN_ENDED:
+		return LessonPlanQuestionTypeOpenEnded
+	default:
+		return LessonPlanQuestionTypeShortAnswer
+	}
+}
+
+type QuestionType string
+
+const (
+	QuestionTypePractice    QuestionType = "PRACTICE"
+	QuestionTypeTest        QuestionType = "TEST"
+	QuestionTypeReasoning   QuestionType = "REASONING"
+	QuestionTypeConceptual  QuestionType = "CONCEPTUAL"
+	QuestionTypeFluency     QuestionType = "FLUENCY"
+	QuestionTypeBrainTeaser QuestionType = "BRAIN_TEASER"
+)
+
+func QuestionTypeToLearningQuestionType(t QuestionType) learning.LearningQuestionType {
+	switch t {
+	case QuestionTypeReasoning:
+		return learning.LearningQuestionType_LEARNING_QUESTION_TYPE_REASONING
+	case QuestionTypeConceptual:
+		return learning.LearningQuestionType_LEARNING_QUESTION_TYPE_CONCEPTUAL
+	case QuestionTypeFluency:
+		return learning.LearningQuestionType_LEARNING_QUESTION_TYPE_FLUENCY
+	case QuestionTypeBrainTeaser:
+		return learning.LearningQuestionType_LEARNING_QUESTION_TYPE_BRAIN_TEASER
+	default:
+		return learning.LearningQuestionType_LEARNING_QUESTION_TYPE_FLUENCY
+	}
+}
+
+var (
+	_ UserQuestion = (*LessonPlanUserQuestion)(nil)
+	_ UserAnswer   = (*Answer)(nil)
+	_ UserAnswer   = (*LessonPlanAnswer)(nil)
+)
+
+type QuillDocumentNode struct {
+	neogo.Label   `neo4j:"QuillDocumentNode"`
+	QuillDocument string `json:"quillDocument" neo4j:"optional"`
+}
+
+type UserQuestion interface {
+	neogo.IAbstract
+	IsQuestion()
+	IsEntity()
+	GetID() id.ID
+	UserBase() BaseUserQuestion
+}
+
+type BaseUserQuestion struct {
+	neogo.Abstract `neo4j:"UserQuestion"`
+	neogo.Node
+	QuillDocumentNode
+	Figure     *string             `json:"figure" neo4j:"optional"`
+	Difficulty *QuestionDifficulty `json:"difficulty" neo4j:"optional"`
+}
+
+func (BaseUserQuestion) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&LessonPlanUserQuestion{},
+		&Question{},
+	}
+}
+
+type Question struct {
+	BaseUserQuestion `neo4j:"Question,id:question"`
+	CreatedAt        time.Time `json:"createdAt"`
+}
+
+func (r Question) IsQuestion() {}
+func (Question) IsEntity()     {}
+func (r Question) GetID() id.ID {
+	return r.Node.ID
+}
+
+func (r Question) UserBase() BaseUserQuestion {
+	return r.BaseUserQuestion
+}
+
+type LessonPlanUserQuestion struct {
+	BaseUserQuestion     `neo4j:"LessonPlanUserQuestion,id:lpuserq"`
+	CreatedAt            time.Time              `json:"createdAt"`
+	Type                 LessonPlanQuestionType `json:"type"`
+	LessonPlanDifficulty *string                `json:"lessonPlanDifficulty" neo4j:"optional"`
+	Difficulty           *string                `json:"difficulty" neo4j:"optional"`
+}
+
+func (LessonPlanUserQuestion) IsQuestion() {}
+func (LessonPlanUserQuestion) IsEntity()   {}
+func (r LessonPlanUserQuestion) GetID() id.ID {
+	return r.Node.ID
+}
+
+func (r LessonPlanUserQuestion) UserBase() BaseUserQuestion {
+	return r.BaseUserQuestion
+}
+
+type UserAnswer interface {
+	neogo.IAbstract
+	IsEntity()
+	GetID() id.ID
+	Base() BaseAnswer
+}
+
+type BaseAnswer struct {
+	neogo.Abstract `neo4j:"UserAnswer"`
+	neogo.Node
+	QuillDocumentNode
+	IsCorrect bool `json:"isCorrect"`
+}
+
+func (BaseAnswer) Implementers() []neogo.IAbstract {
+	return []neogo.IAbstract{
+		&LessonPlanAnswer{},
+	}
+}
+
+type LessonPlanAnswer struct {
+	BaseAnswer `neo4j:"LessonPlanAnswer,id:lpans"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+func (LessonPlanAnswer) IsEntity() {}
+
+func (r LessonPlanAnswer) GetID() id.ID {
+	return r.Node.ID
+}
+
+func (r LessonPlanAnswer) Base() BaseAnswer {
+	return r.BaseAnswer
+}
+
+type (
+	QuestionDifficulty    string
+	QuestionPracticePhase string
+)
+
+const (
+	QuestionDifficultyEasy      QuestionDifficulty = "EASY"
+	QuestionDifficultyMedium    QuestionDifficulty = "MEDIUM"
+	QuestionDifficultyHard      QuestionDifficulty = "HARD"
+	QuestionDifficultyExtension QuestionDifficulty = "EXT"
+
+	QuestionPracticePhaseTeacherQuestions QuestionPracticePhase = "TEACHER_QUESTION"
+	QuestionPracticePhaseClassPractice    QuestionPracticePhase = "CLASS_PRACTICE"
+	QuestionPracticePhaseIDo              QuestionPracticePhase = "I_DO"
+	QuestionPracticePhaseWeDo             QuestionPracticePhase = "WE_DO"
+	QuestionPracticePhaseYouDo            QuestionPracticePhase = "YOU_DO"
+)
+
+var QuestionDifficulties = []QuestionDifficulty{QuestionDifficultyEasy, QuestionDifficultyMedium, QuestionDifficultyHard, QuestionDifficultyExtension}
+
+func LearningQuestionDifficultyToQuestionDifficulty(learningQuestionDifficulty learning.QuestionDifficulty) QuestionDifficulty {
+	switch learningQuestionDifficulty {
+	case learning.QuestionDifficulty_QUESTION_DIFFICULTY_EASY:
+		return QuestionDifficultyEasy
+	case learning.QuestionDifficulty_QUESTION_DIFFICULTY_MEDIUM:
+		return QuestionDifficultyMedium
+	case learning.QuestionDifficulty_QUESTION_DIFFICULTY_HARD:
+		return QuestionDifficultyHard
+	case learning.QuestionDifficulty_QUESTION_DIFFICULTY_EXTENSION:
+		return QuestionDifficultyExtension
+	default:
+		return QuestionDifficultyEasy
+	}
+}
+
+func QuestionDifficultyToLearningQuestionDifficulty(questionDifficulty QuestionDifficulty) learning.QuestionDifficulty {
+	switch questionDifficulty {
+	case QuestionDifficultyEasy:
+		return learning.QuestionDifficulty_QUESTION_DIFFICULTY_EASY
+	case QuestionDifficultyMedium:
+		return learning.QuestionDifficulty_QUESTION_DIFFICULTY_MEDIUM
+	case QuestionDifficultyHard:
+		return learning.QuestionDifficulty_QUESTION_DIFFICULTY_HARD
+	case QuestionDifficultyExtension:
+		return learning.QuestionDifficulty_QUESTION_DIFFICULTY_EXTENSION
+	default:
+		return learning.QuestionDifficulty_QUESTION_DIFFICULTY_EASY
+	}
+}
+
+type Answer struct {
+	BaseAnswer `neo4j:"Answer,id:ans"`
+}
+
+func (r Answer) GetID() id.ID {
+	return r.Node.ID
+}
+func (Answer) IsEntity() {}
+func (r Answer) Base() BaseAnswer {
+	return r.BaseAnswer
+}
+
+// api/question/repository.go
+package question
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type Repository interface {
+	GetQuestion(ctx context.Context, questionID id.ID) (*Question, error)
+	GetUserQuestion(ctx context.Context, questionID id.ID) (UserQuestion, error)
+	GetLessonPlanAnswers(ctx context.Context, questionID id.ID) ([]*LessonPlanAnswer, error)
+	GetQuestionBankForLessonPlan(ctx context.Context, input LessonPlanQuestionBankInput) ([]*Question, error)
+	IsQuestionBankEmptyForLessonPlan(ctx context.Context, input LessonPlanQuestionBankInput) (bool, error)
+	GetLessonPlanNodeUserQuestion(ctx context.Context, nodeID id.ID) (*LessonPlanUserQuestion, error)
+}
+
+type LessonPlanQuestionBankInput struct {
+	SkillID      id.ID
+	LessonPlanID id.ID
+	Types        []QuestionType
+}
+

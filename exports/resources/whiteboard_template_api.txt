@@ -1,0 +1,276 @@
+// api/whiteboard_template/entity.go
+package whiteboardtemplate
+
+import (
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type WhiteboardTemplateDoc struct {
+	ID       id.ID          `firestore:"id"`
+	Template map[string]any `firestore:"template"`
+	Context  string         `firestore:"context"`
+}
+
+type SkillWhiteboardTemplate struct {
+	ID         id.ID   `firestore:"id"`
+	SkillID    string  `firestore:"skillId"`
+	TemplateID *string `firestore:"templateId"`
+	CreatedAt  string  `firestore:"createdAt"`
+}
+
+type GeneralWhiteboardTemplate struct {
+	ID      id.ID          `firestore:"id"`
+	Name    string         `firestore:"name"`
+	IconMap map[string]any `firestore:"iconMap"`
+}
+
+type SkillSlide struct {
+	SkillTemplateID    id.ID          `json:"skillTemplateID"`
+	GeneralTemplateID  id.ID          `json:"generalTemplateID"`
+	Title              string         `json:"title"`
+	Icon               map[string]any `json:"icon"`
+	WhiteboardTemplate map[string]any `json:"whiteboardTemplate"`
+}
+
+const (
+	OverviewGeneralTemplateID     = "overview_general_template"
+	OverviewSkillTemplateIDPrefix = "overview_skill_template_"
+)
+
+func CreateOverviewSkillTemplateID(skillID string) string {
+	return OverviewSkillTemplateIDPrefix + skillID
+}
+
+// api/whiteboard_template/repository.go
+package whiteboardtemplate
+
+import (
+	"context"
+
+	"github.com/MathGaps/core/pkg/domain/id"
+)
+
+type Repository interface {
+	GetWhiteboardTemplate(ctx context.Context, id id.ID) (template map[string]any, ready bool, err error)
+	GetSkillsTemplatesMap(ctx context.Context, skillIDs []id.ID) (map[id.ID][]*SkillWhiteboardTemplate, error)
+	GetGeneralTemplate(ctx context.Context, id id.ID) (*GeneralWhiteboardTemplate, error)
+	GetSkillSlides(ctx context.Context, skillID id.ID, excludedSkillTemplateIDs []id.ID) ([]*SkillSlide, error)
+	GetSkillSlidesForLessonPlan(ctx context.Context, lessonPlanID, skillID id.ID) ([]*SkillSlide, error)
+	ResolveSkillSlides(ctx context.Context, skillTemplateIDs []id.ID, generalTemplateIDs []id.ID) ([]*SkillSlide, error)
+}
+
+// api/whiteboard_template/whiteboard_templates.go
+package whiteboardtemplate
+
+const (
+	ApplicationNodeTemplate = `
+{
+  "objects": [
+    {
+      "id": 1044387226,
+      "x": 600,
+      "y": 0,
+      "type": "mask",
+      "image": {
+        "id": 1044387226,
+        "x": 600,
+        "y": 0,
+        "type": "file",
+        "fileType": "image",
+        "properties": {
+          "propertyType": "image",
+          "fit": "cover",
+          "alignment": null
+        },
+        "imageSize": null,
+        "size": [
+          360,
+          540
+        ],
+        "image": true,
+        "url": "{{ .ImageURL }}",
+        "localFile": null
+      },
+      "size": [
+        360,
+        540
+      ]
+    },
+    {
+      "id": 660742962,
+      "x": 24,
+      "y": 24,
+      "type": "text",
+      "properties": {
+        "type": "text",
+        "objectSize": [
+          560,
+          268
+        ],
+        "editorType": "quill",
+				"delta": [
+	        {{ range $index, $element := .QuillData.Delta }}
+            {{ if $index }},{{ end }}
+            {{ $element | toJSON }}
+	        {{ end }}
+        ]
+      }
+    }
+  ],
+  "canvasData": {
+    "constraintSize": [
+      2122,
+      1142
+    ],
+    "canvasSize": [
+      960,
+      540
+    ],
+    "translateX": 153.7688266196743,
+    "translateY": 55.60747663551401,
+    "scale": 1.7969705882352942,
+    "scaleEnabled": false,
+    "panEnabled": false
+  }
+}
+`
+
+	MathsDebateTemplate = `{
+  "objects": [
+    {
+      "id": 747192358,
+      "x": 0,
+      "y": 0,
+      "type": "mask",
+      "image": {
+        "id": 747192358,
+        "x": 0,
+        "y": 0,
+        "type": "file",
+        "fileType": "image",
+        "properties": {
+          "propertyType": "image",
+          "fit": "cover",
+          "alignment": null
+        },
+        "imageSize": null,
+        "size": [
+          960,
+          170
+        ],
+        "image": true,
+        "url": "{{ .ImageURL }}",
+        "localFile": null
+      },
+      "size": [
+        960,
+        170
+      ]
+    },
+    {
+      "id": 116376109,
+      "x": 30,
+      "y": 180,
+      "type": "text",
+      "properties": {
+        "type": "text",
+        "objectSize": [
+          900,
+          1080
+        ],
+        "editorType": "quill",
+				"delta": [
+	        {{ range $index, $element := .QuillData.Delta }}
+            {{ if $index }},{{ end }}
+            {{ $element | toJSON }}
+	        {{ end }}
+        ]
+			}
+		}
+	],
+	"canvasData": {
+    "constraintSize": [
+      1646,
+      912
+    ],
+    "canvasSize": [
+      960,
+      1080
+    ],
+    "translateX": 622.9429824560415,
+    "translateY": 55.60747663551402,
+    "scale": 0.7998688524590165,
+    "scaleEnabled": false,
+    "panEnabled": true
+  }
+}`
+
+	BrainTeaserTemplate = `{
+	"objects": [
+		{
+			"id": 747192358,
+			"x": 0,
+			"y": 0,
+			"type": "mask",
+			"image": {
+				"id": 747192358,
+				"x": 0,
+				"y": 0,
+				"type": "file",
+				"fileType": "image",
+				"properties": {
+					"propertyType": "image", 
+					"fit": "cover"
+				},
+				"size": [
+					960,
+					170
+				],
+				"image": true,
+				"url": "{{ .ImageURL }}",
+				"localFile": null
+			},
+			"size": [
+				960,
+				170
+			]
+		},
+		{
+			"id": 116376109,
+			"x": 30,
+			"y": 180,
+			"type": "text",
+			"properties": {
+				"type": "text",
+        "objectSize": [
+          900,
+          1080
+        ],
+				"editorType": "quill",
+				"delta": [
+	        {{ range $index, $element := .QuillData.Delta }}
+            {{ if $index }},{{ end }}
+            {{ $element | toJSON }}
+	        {{ end }}
+        ]
+			}
+		}
+	],
+	"canvasData": {
+		"constraintSize": [
+			1646,
+			912
+		],
+		"canvasSize": [
+			960,
+			1080
+		],
+		"translateX": 622.9429824560415,
+		"translateY": 55.60747663551402,
+		"scale": 0.7998688524590165,
+		"scaleEnabled": false,
+		"panEnabled": true
+	}
+}`
+)
+
