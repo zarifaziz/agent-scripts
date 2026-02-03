@@ -1,0 +1,16 @@
+{
+  "notion": {
+    "url": "https://mcp.notion.com/mcp",
+    "includeTools": [
+      "notion_search",
+      "notion_fetch",
+      "notion_create_pages",
+      "notion_update_page",
+      "notion_create_comment",
+      "notion_get_comments",
+      "notion_get_teams",
+      "notion_get_users",
+      "notion_query_database_view"
+    ]
+  }
+}
