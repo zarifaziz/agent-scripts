@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Source .env for GROQ_API_KEY
+if [[ -f "$SKILL_DIR/.env" ]]; then
+    set -a
+    source "$SKILL_DIR/.env"
+    set +a
+fi
+
+if [[ -z "${GROQ_API_KEY:-}" ]]; then
+    echo "Error: GROQ_API_KEY not set. Add it to $SKILL_DIR/.env" >&2
+    exit 1
+fi
+
+exec uv run --script "$SKILL_DIR/process_recording.py" "$@"
