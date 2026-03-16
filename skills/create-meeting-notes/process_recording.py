@@ -24,7 +24,15 @@ MODEL = "whisper-large-v3"
 MAX_FILE_BYTES = 24 * 1024 * 1024  # 25MB limit with safety margin
 DEFAULT_CHUNK_MINUTES = 10
 MAX_CONCURRENT = 4
-FRAME_INTERVAL_SECONDS = 15
+def frame_interval(duration_seconds: float) -> int:
+    """Adaptive frame interval to keep candidate count around ~60."""
+    minutes = duration_seconds / 60
+    if minutes <= 15:
+        return 15
+    elif minutes <= 30:
+        return 30
+    else:
+        return 45
 
 
 # ── ffmpeg helpers ──────────────────────────────────────────────────
@@ -275,7 +283,8 @@ def main() -> None:
     print(f"Transcript written → {transcript_path}")
 
     # Extract frames
-    frames = extract_frames(mp4_path, output_dir, FRAME_INTERVAL_SECONDS, duration)
+    interval = frame_interval(duration)
+    frames = extract_frames(mp4_path, output_dir, interval, duration)
 
     # Write metadata
     metadata = {
@@ -285,7 +294,7 @@ def main() -> None:
         "duration_formatted": format_duration(duration),
         "resolution": resolution,
         "date": datetime.now().isoformat(),
-        "frame_interval_seconds": FRAME_INTERVAL_SECONDS,
+        "frame_interval_seconds": interval,
         "candidate_frames": frames,
         "transcript_segments": len(transcript["segments"]),
     }

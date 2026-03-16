@@ -68,7 +68,7 @@ If the script fails, report the error to the user and stop.
 
 9. **Clean up**:
    - Delete the `_candidates/` directory: `rm -rf <output>/_candidates/`
-   - Keep `transcript.txt` — it serves as raw reference for AI consumption
+   - Delete `transcript.txt`: `rm <output>/transcript.txt`
    - Keep `metadata.json` — lightweight session metadata
 
 ### Output Format (notes.md)
@@ -121,9 +121,6 @@ If the script fails, report the error to the user and stop.
 - [ ] [action item with owner if mentioned]
 - [ ] [next action item]
 
-## Raw Transcript
-See [transcript.txt](transcript.txt) for the full timestamped transcript.
-
 ---
 *Generated from Gather recording via Groq Whisper transcription + visual analysis.*
 ```
@@ -135,4 +132,4 @@ See [transcript.txt](transcript.txt) for the full timestamped transcript.
 - Screenshot captions should explain *why* the frame matters, not just describe it
 - If the transcript has speaker labels, attribute quotes and action items
 - If a topic has no meaningful visual content, skip the screenshot for that section
-- The `transcript.txt` and `metadata.json` are preserved as reference artifacts
+- The `metadata.json` is kept as a lightweight record; everything else is cleaned up
