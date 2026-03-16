@@ -68,7 +68,7 @@ If the script fails, report the error to the user and stop.
 
 9. **Clean up**:
    - Delete the `_candidates/` directory: `rm -rf <output>/_candidates/`
-   - Delete `transcript.txt`: `rm <output>/transcript.txt`
+   - Keep `transcript.txt` — raw timestamped transcript for reference
    - Keep `metadata.json` — lightweight session metadata
 
 ### Output Format (notes.md)
@@ -132,4 +132,4 @@ If the script fails, report the error to the user and stop.
 - Screenshot captions should explain *why* the frame matters, not just describe it
 - If the transcript has speaker labels, attribute quotes and action items
 - If a topic has no meaningful visual content, skip the screenshot for that section
-- The `metadata.json` is kept as a lightweight record; everything else is cleaned up
+- The `transcript.txt` and `metadata.json` are preserved as reference artifacts
