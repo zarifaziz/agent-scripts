@@ -1,17 +1,17 @@
 ---
-description: "Generate meeting notes from Gather recordings. Use when user provides a Gather recording MP4 or asks for meeting notes from a video/recording file."
+description: "Generate meeting notes from any video/audio recording (Gather, Zoom, Teams, Loom, etc). Use when user provides a recording file or asks for meeting notes from a video."
 ---
 
 # Create Meeting Notes
 
-Process Gather MP4 recordings into structured, AI-digestible meeting notes with curated screenshots and preserved transcript.
+Process video recordings into structured, AI-digestible meeting notes with curated screenshots and preserved transcript. Works with any MP4/video recording — Gather, Zoom, Teams, Loom, screen recordings, etc.
 
 ## When to Use
 
 Activate when the user:
-- Provides a Gather recording MP4 file path
+- Provides a recording file path (MP4, video)
 - Asks for "meeting notes" from a video/recording
-- Says something like "process this Gather recording"
+- Says something like "process this recording" or "create notes from this meeting"
 
 ## Workflow
 
@@ -79,7 +79,7 @@ If the script fails, report the error to the user and stop.
 **Date:** [date from metadata or filename]
 **Duration:** [duration from metadata]
 **Source:** [original filename]
-**Participants:** [names visible in Gather sidebar or mentioned in transcript]
+**Participants:** [names visible on screen or mentioned in transcript]
 
 ---
 
@@ -122,7 +122,7 @@ If the script fails, report the error to the user and stop.
 - [ ] [next action item]
 
 ---
-*Generated from Gather recording via Groq Whisper transcription + visual analysis.*
+*Generated from recording via Groq Whisper transcription + visual analysis.*
 ```
 
 ## Important Notes

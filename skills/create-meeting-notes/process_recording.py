@@ -2,7 +2,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["openai>=1.0"]
 # ///
-"""Process a Gather recording MP4: extract audio, transcribe via Groq Whisper
+"""Process a video recording: extract audio, transcribe via Groq Whisper
 with timestamps, and extract candidate screenshot frames.
 """
 from __future__ import annotations
@@ -267,7 +267,7 @@ def main() -> None:
     print(f"Duration: {format_duration(duration)} | Resolution: {resolution}")
 
     # Extract audio to temp dir, transcribe, clean up
-    tmpdir = tempfile.mkdtemp(prefix="gather_notes_")
+    tmpdir = tempfile.mkdtemp(prefix="meeting_notes_")
     try:
         audio_path = os.path.join(tmpdir, "audio.mp3")
         print(f"Extracting audio → {os.path.join(output_dir, 'audio.mp3')}")
