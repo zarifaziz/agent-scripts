@@ -93,7 +93,7 @@ If a compilation or test check is failing:
 git rev-list --count HEAD..origin/main
 ```
 
-If more than 10 commits behind main and no conflicts exist:
+If more than 5 commits behind main and no conflicts exist:
 1. Merge main to keep the branch fresh
 2. Push
 
