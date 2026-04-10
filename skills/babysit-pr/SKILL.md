@@ -57,17 +57,22 @@ For each unaddressed comment:
 4. Push
 5. Reply to the comment thread explaining what was changed
 
-### Check 3: CI Failures
+### Check 3: CI Compilation/Test Failures
 
 ```bash
 # Check CI status
 gh pr checks ${PR_NUMBER}
 ```
 
-If any checks are failing:
+**Only act on compilation and test failures** (e.g. `rust-test`, `flutter-test`, `cargo check` errors). These are the checks that actually block merging and are most likely caused by this PR or a merge.
+
+**Ignore formatting and linting failures** (e.g. `rust-format`, `rust-lint`, `flutter-analyze`, `dart-autoformat`). These are often pre-existing on main and fixing them in this PR adds scope creep. Report them to the user but do not fix them.
+
+If a compilation or test check is failing:
 1. Read the failure logs: `gh run view <run-id> --log-failed`
-2. Diagnose the root cause
-3. Fix, commit, and push
+2. Check if the failure is in a file changed by this PR: `gh pr diff --name-only`
+3. If the failure is in an unrelated file, **report it but do not fix it** — it's likely pre-existing
+4. If the failure is related to this PR's changes, diagnose the root cause, fix, commit, and push
 
 ### Check 4: Branch Staleness
 
