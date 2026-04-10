@@ -24,6 +24,18 @@ Continuously monitors and maintains the current PR. Designed to be run on a loop
 
 On each run, perform these checks **in order**. Stop at the first check that requires action, fix it, commit, push, then exit. The next loop iteration will pick up remaining items.
 
+### Check 0: PR Still Open?
+
+```bash
+# Check if PR is still open
+PR_STATE=$(gh pr view --json state -q '.state')
+```
+
+If the PR state is `MERGED` or `CLOSED`:
+1. Report the final state to the user (e.g., "PR #123 has been merged. Stopping babysit loop.")
+2. Call the `signal_loop_success` tool to stop the loop
+3. Exit immediately — no further checks needed
+
 ### Check 1: Merge Conflicts
 
 ```bash
