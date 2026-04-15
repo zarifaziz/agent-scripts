@@ -13,8 +13,6 @@ Automates testing modality features in the schools-app frontend by detecting the
 ~/Coding/metarepo/frontend/app/schools-app
 ```
 
-The schools-app must be on the `schools-3.0` branch.
-
 ## Steps
 
 ### 1. Auto-detect the worktree
@@ -111,4 +109,4 @@ After running, confirm:
 
 ## Notes
 
-- The schools-app should already be on the `schools-3.0` branch. If it isn't, switch to it first.
+- The schools-app uses the `main` branch.
