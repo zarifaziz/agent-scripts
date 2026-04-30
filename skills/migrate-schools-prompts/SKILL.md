@@ -52,7 +52,7 @@ Then read these files in order:
 
 Look at `plan.md` for the **Status checklist** section. Each slide has one of: `[ ]` not started, `[~]` in progress, `[x]` done.
 
-If no checklist exists yet, derive state from `git log --oneline` in the worktree — slides ported land as commits with messages like `feat(prompts): port <slide_name> from legacy go template`. The first slide *without* such a commit (in the order P1 → P2 from `plan.md`) is the next one.
+If no checklist exists yet, derive state from `git log --oneline` in the worktree — slides ported land as commits with messages like `feat(prompts): port <slide_name> from legacy go template`. The first slide *without* such a commit (in the order Tier 1 → Tier 2 from `plan.md`) is the next one.
 
 If the user names a specific slide (e.g. "port exit_ticket"), use that one regardless of order.
 
@@ -276,12 +276,12 @@ Open `.tmp/prompt-migration/plan.md` and tick the slide in the **Status checklis
 ```markdown
 ## Status checklist
 
-P1 — pattern setters (manual port by user):
+Tier 1 — pattern-establishing slides (port first):
 - [x] warm_up_questions
 - [ ] exit_ticket
 - [ ] contemplative
 
-P2 — Claude follows pattern:
+Tier 2 — follow-on slides:
 - [ ] activity
 - [ ] scaffolded
 - [ ] multiple_choice
