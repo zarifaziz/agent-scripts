@@ -1,11 +1,11 @@
 ---
 name: create-worktree
-description: Create a git worktree for any repo under `.worktrees/<BRANCH_NAME>/`, run detected setup steps (copy .env/CLAUDE.local.md, install deps), and push an init commit. Use when asked to "make a worktree", "create a worktree", "set up a worktree", or "new worktree for this branch".
+description: Create a git worktree for any repo under `.worktrees/<flattened-branch-name>/`, run detected setup steps (copy .env/CLAUDE.local.md, install deps), and push an init commit. Use when asked to "make a worktree", "create a worktree", "set up a worktree", or "new worktree for this branch".
 ---
 
 # Create Worktree
 
-Creates a git worktree for any repo under `.worktrees/<BRANCH_NAME>/`, copies gitignored env files if found, installs dependencies based on the detected language/toolchain, and pushes an empty init commit so the branch exists on origin.
+Creates a git worktree for any repo under `.worktrees/<flattened-branch-name>/`, copies gitignored env files if found, installs dependencies based on the detected language/toolchain, and pushes an empty init commit so the branch exists on origin.
 
 For the modality repo specifically, use [`create-modality-worktree`](../create-modality-worktree/skill.md) instead — it handles modality-specific paths.
 
@@ -24,7 +24,31 @@ For the modality repo specifically, use [`create-modality-worktree`](../create-m
 
 ## Worktree Location
 
-`.worktrees/<BRANCH_NAME>/` relative to the repo root.
+`.worktrees/<WORKTREE_DIR>/` relative to the repo root.
+
+**`<WORKTREE_DIR>` is NOT the raw branch name — it must never contain `/`.**
+A branch like `zarifaziz/pee-1154-migrate-uv` would otherwise create a nested
+`.worktrees/zarifaziz/pee-1154-migrate-uv/`, adding a junk directory level.
+
+Derive it from the branch name:
+
+1. Drop a leading `owner/` segment if the branch is `<user>/<slug>` (Linear and
+   `git-town` style branches) — the owner adds nothing to a path already scoped
+   to the repo.
+2. Replace any remaining `/` with `-`.
+
+```bash
+WORKTREE_DIR=$(echo "$BRANCH_NAME" | sed 's#^[^/]*/##' | tr '/' '-')
+```
+
+| `BRANCH_NAME` | `WORKTREE_DIR` |
+|---|---|
+| `zarifaziz/pee-1154-migrate-uv` | `pee-1154-migrate-uv` |
+| `feature/auth/oauth-pkce` | `auth-oauth-pkce` |
+| `fix-flaky-test` | `fix-flaky-test` |
+
+The **branch name keeps its full original form** — only the directory is
+flattened. This matters: Linear links a PR to its issue by branch name.
 
 ## One-Shot Command
 
@@ -32,13 +56,45 @@ Run from anywhere. Substitute `<REPO_PATH>` and `<BRANCH_NAME>`:
 
 ```bash
 cd <REPO_PATH> && \
+BRANCH_NAME='<BRANCH_NAME>' && \
+WORKTREE_DIR=$(echo "$BRANCH_NAME" | sed 's#^[^/]*/##' | tr '/' '-') && \
 git fetch origin main && \
 mkdir -p .worktrees && \
-git worktree add .worktrees/<BRANCH_NAME> -b <BRANCH_NAME> origin/main && \
-cd .worktrees/<BRANCH_NAME> && \
+git worktree add ".worktrees/$WORKTREE_DIR" -b "$BRANCH_NAME" origin/main && \
+cd ".worktrees/$WORKTREE_DIR" && \
 git commit --allow-empty -m "chore: Init commit" && \
-git push -u origin <BRANCH_NAME>
+git push -u origin "$BRANCH_NAME"
 ```
+
+If the branch **already exists** (e.g. work is committed on it elsewhere), drop
+`-b ... origin/main` and skip the empty init commit:
+
+```bash
+git worktree add ".worktrees/$WORKTREE_DIR" "$BRANCH_NAME"
+```
+
+A branch can only be checked out in one place, so switch the main working tree
+off it first (`git checkout main`).
+
+Add `.worktrees/` to `.git/info/exclude` if the repo doesn't already gitignore
+it, so the worktree doesn't show up as untracked in your PRs.
+
+### Moving an existing worktree
+
+`git worktree move` does **not** fix up a virtualenv inside it. Python venvs are
+not relocatable: every launcher in `.venv/bin/` hard-codes an absolute path to
+`.venv/bin/python`, so after a move they fail with `No such file or directory`
+(exit 126). Rebuild the env afterwards:
+
+```bash
+git worktree move .worktrees/<old> .worktrees/<new>
+cd .worktrees/<new> && rm -rf .venv && uv sync   # or the repo's install step
+```
+
+Confusingly, `uv run <project-script>` may still work — `uv run` reinstalls the
+project itself and rewrites *its* launcher, while leaving every dependency's
+stale launcher untouched. So the failure shows up on `black`/`mypy`, not on the
+command you just ran. Get the path right up front and you avoid this entirely.
 
 Setup steps (env files, deps) are detected and run separately — see below.
 
@@ -46,10 +102,12 @@ Setup steps (env files, deps) are detected and run separately — see below.
 
 ```bash
 cd <REPO_PATH>
+BRANCH_NAME='<BRANCH_NAME>'
+WORKTREE_DIR=$(echo "$BRANCH_NAME" | sed 's#^[^/]*/##' | tr '/' '-')
 git fetch origin main
 mkdir -p .worktrees
-git worktree add .worktrees/<BRANCH_NAME> -b <BRANCH_NAME> origin/main
-cd .worktrees/<BRANCH_NAME>
+git worktree add ".worktrees/$WORKTREE_DIR" -b "$BRANCH_NAME" origin/main
+cd ".worktrees/$WORKTREE_DIR"
 ```
 
 ### Copy env files (only if they exist at the repo root or known subdirs)
@@ -94,7 +152,9 @@ fi
   npm install
 }
 
-# Python
+# Python — uv first (PeerAI standard), then legacy fallbacks
+[ -f uv.lock ]          && uv sync
+[ -f poetry.lock ]      && poetry install
 [ -f requirements.txt ] && pip install -r requirements.txt
 
 # Go
@@ -118,11 +178,11 @@ git push -u origin <BRANCH_NAME>
 
 After running, confirm:
 
-1. `.worktrees/<BRANCH_NAME>/` directory exists inside the repo root
-2. `git -C .worktrees/<BRANCH_NAME> rev-parse --abbrev-ref HEAD` prints `<BRANCH_NAME>`
+1. `.worktrees/$WORKTREE_DIR/` exists inside the repo root, and contains **no** `/` beyond that
+2. `git -C .worktrees/$WORKTREE_DIR rev-parse --abbrev-ref HEAD` prints the full `<BRANCH_NAME>`
 3. Any `.env` files that exist at the root are present in the worktree
 4. `CLAUDE.local.md` exists in the worktree if it existed at the root
-5. `git -C .worktrees/<BRANCH_NAME> log --oneline -1` shows the init commit
+5. `git -C .worktrees/$WORKTREE_DIR log --oneline -1` shows the init commit
 6. `git ls-remote origin <BRANCH_NAME>` returns a ref (push succeeded)
 
 ## Cleanup
@@ -131,7 +191,7 @@ When done with a worktree:
 
 ```bash
 cd <REPO_PATH>
-git worktree remove .worktrees/<BRANCH_NAME>
+git worktree remove .worktrees/$WORKTREE_DIR
 git branch -D <BRANCH_NAME>             # local branch (optional)
 git push origin --delete <BRANCH_NAME>  # remote branch (optional, after PR merged)
 ```
@@ -148,7 +208,7 @@ When invoked via the Task tool as a subagent:
 4. Return structured output:
    ```
    STATUS: success | failure
-   WORKTREE_PATH: <absolute path to worktree>
+   WORKTREE_PATH: <absolute path to worktree (flattened, no nested owner dir)>
    BRANCH: <BRANCH_NAME>
    SETUP_STEPS_RUN: <comma-separated list of steps that ran, e.g. "copy .env, npm install">
    ERROR: <error message if failed>
