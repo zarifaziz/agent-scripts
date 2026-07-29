@@ -23,7 +23,8 @@ Do NOT use for pure refactors with no behavioural change, or when the backend is
 |---|---|
 | Feature under test | Read from the conversation. If ambiguous, ASK — never guess. |
 | Definition of done | Derived in Step 1, confirmed by the user before any clicking. |
-| Running local stack | Detected in Step 2. Offer to start what is missing; never start it silently. |
+| Running local stack | Detected in Step 2 by enumerating listeners, not by assuming ports. Offer to start what is missing; never start it silently. |
+| Checkout under test | The worktree (or root) whose branch contains the feature. Confirmed in Step 2 against the running listeners' `cwd`. |
 
 **Shell state does not persist between Bash calls.** Every snippet below is self-contained for that reason. Do not refactor a value into a variable and use it in a later call — write it to a file.
 
@@ -56,40 +57,53 @@ docker ps --format '{{.Names}}\t{{.Status}}'   # expect postgres-db-v1, cognito-
 
 Missing: `cd /Users/zaz/Coding/metarepo/tooling/peer-local-setup && docker-compose up -d`.
 
-Then confirm the app on :3000 is the one you mean. A port that answers is not the app you want:
+**Discover the ports; never assume them.** `:3000`/`:8081` is only the root checkout's pair. Work in progress usually lives in a **git worktree** under `<repo>/.worktrees/<branch>/`, running on its own ports — 3001/8091 and upward — and the two pairs must not be mixed. Testing the root pair when the feature is on a worktree branch produces a confidently green result about code that does not contain the feature.
+
+Enumerate what is actually listening and let each process's `cwd` tell you which checkout it belongs to:
 
 ```bash
-for pid in $(lsof -t -nP -iTCP:3000 -sTCP:LISTEN | sort -u); do
-  ps -o pid,etime,command -p $pid | tail -1 | cut -c1-110
-  echo "  cwd: $(lsof -a -p $pid -d cwd -Fn | grep ^n | cut -c2-)"
+for port in $(seq 3000 3005; seq 8080 8095); do
+  for pid in $(lsof -t -nP -iTCP:$port -sTCP:LISTEN 2>/dev/null | sort -u); do
+    cwd=$(lsof -a -p $pid -d cwd -Fn 2>/dev/null | grep ^n | cut -c2-)
+    case "$cwd" in */metarepo/*)
+      printf '%-5s %-7s %-9s %s\n' "$port" "$pid" \
+        "$(ps -o etime= -p $pid | tr -d ' ')" "$cwd" ;;
+    esac
+  done
 done
-curl -s -m 5 http://localhost:8081/health
 ```
 
-Three failure modes, all seen in practice:
+Read the output as pairs: a `peer-fe` cwd and a `peer-api-svc` cwd sharing the same trailing path segment (both root, or both `.worktrees/<branch>`) are one stack. Confirm the branch is the one under test — `git -C <cwd> rev-parse --abbrev-ref HEAD` — and state the chosen pair in the report. If the feature's branch has no running pair, say so and offer to start one; do not silently fall back to the root pair.
 
-1. **Another project owns the port.** Confirm a listener's `cwd` is the repo you mean. Two projects can coexist on :3000 — one on `*:3000`, one on `[::1]:3000` — and `localhost` resolves to whichever holds `::1`.
-2. **The dev server is stale.** Compare `etime` against `git log -1 --date=relative`. A server older than the last pull reports phantom `Module not found` errors for files that exist on disk. Restart before believing any compile error.
-3. **The backend is down.** An empty `/health` is the normal resting state; it is not auto-started.
+Then health-check the backend port you just identified: `curl -s -m 5 http://localhost:<be_port>/health`.
 
-Starting either — capture the pid, and poll rather than sleeping a magic number:
+Four failure modes, all seen in practice:
+
+1. **Wrong checkout for the feature.** A worktree's branch has the code; the root checkout does not. This is the failure that silently invalidates the whole run.
+2. **Another project owns the port.** Confirm a listener's `cwd` is the repo you mean. Two projects can coexist on :3000 — one on `*:3000`, one on `[::1]:3000` — and `localhost` resolves to whichever holds `::1`.
+3. **The dev server is stale.** Compare `etime` against `git -C <cwd> log -1 --date=relative`. A server older than the last pull reports phantom `Module not found` errors for files that exist on disk. Restart before believing any compile error.
+4. **The backend is down.** An empty `/health` is the normal resting state; it is not auto-started.
+
+Starting either — run from the **chosen checkout's** directory, name the log after its port so two stacks cannot overwrite each other's evidence, capture the pid, and poll rather than sleeping a magic number:
 
 ```bash
-cd /Users/zaz/Coding/metarepo/backend/peer-api-svc
-rm -f /tmp/peerai-be.log
-(nohup poetry run start > /tmp/peerai-be.log 2>&1 & echo $! > /tmp/peerai-be.pid)
-for i in $(seq 1 40); do curl -sf -m2 http://localhost:8081/health && break; sleep 2; done
+cd <be_cwd>
+rm -f /tmp/peerai-be-<be_port>.log
+(nohup poetry run start > /tmp/peerai-be-<be_port>.log 2>&1 & echo $! > /tmp/peerai-be-<be_port>.pid)
+for i in $(seq 1 40); do curl -sf -m2 http://localhost:<be_port>/health && break; sleep 2; done
 ```
 
-Frontend is the same shape from `frontend/peer-fe` (`npm start > /tmp/peerai-fe.log`), but wait on the log, not the port: `grep -q "compiled successfully" /tmp/peerai-fe.log`. A returning `npm start` is not readiness.
+A worktree backend usually needs its port passed explicitly rather than `poetry run start`'s default; check the `.env` in that worktree, and note that `reload=True` spawns a child that resets logging config, which hides the `chat_agent` event stream Step 6 depends on. Prefer a direct `uvicorn.run(...)` invocation with `logging.basicConfig(level=logging.INFO)` when the log plane matters.
 
-**If the backend was already running, `/tmp/peerai-be.log` may be stale or from another branch.** Reading it would manufacture a green trace from an unrelated session. Assert the binding first:
+Frontend is the same shape from `<fe_cwd>`, but wait on the log, not the port: `grep -q "compiled successfully" /tmp/peerai-fe-<fe_port>.log`. A returning `npm start` is not readiness. Reuse the port the worktree already uses — `ps -eo pid,ppid,command | grep webpack` shows the original `--port` argument, and the parent `npm exec` pid must be killed alongside the `webpack` child or the port stays bound.
+
+**If the backend was already running, its log may be stale or from another branch.** Reading it would manufacture a green trace from an unrelated session. Assert the binding — that the running pid actually holds the log file open:
 
 ```bash
-lsof -p $(lsof -t -nP -iTCP:8081 -sTCP:LISTEN | head -1) 2>/dev/null | grep -c peerai-be.log
+lsof -p $(lsof -t -nP -iTCP:<be_port> -sTCP:LISTEN | head -1) 2>/dev/null | grep -c '\.log'
 ```
 
-Zero means the log plane is unavailable — say so and rely on UI plus DB, or restart the backend with the redirect. Note :8081 legitimately shows **two** pids (uvicorn parent plus a `multiprocessing.spawn` child); that is not a port collision.
+Zero means the log plane is unavailable — say so and rely on UI plus DB, or restart the backend with the redirect. Note a backend port legitimately shows **two** pids (uvicorn parent plus a `multiprocessing.spawn` child); that is not a port collision.
 
 ### Step 3 — Authenticate
 
@@ -101,7 +115,7 @@ Load the browser tools in one batched call first — they are deferred and error
 ToolSearch: select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome__tabs_create_mcp,mcp__claude-in-chrome__navigate,mcp__claude-in-chrome__computer,mcp__claude-in-chrome__find,mcp__claude-in-chrome__read_page,mcp__claude-in-chrome__javascript_tool,mcp__claude-in-chrome__read_console_messages
 ```
 
-Then `tabs_context_mcp`, open a NEW tab (never hijack one the user is working in), and navigate to `http://localhost:3000`. If the studies list renders, the session is warm — skip ahead. If `/login` renders, sign in with the local cognito-local super admin: `superadmin@example.com` / `superadmin`. Confirm by screenshot that the studies list rendered before continuing.
+Then `tabs_context_mcp`, open a NEW tab (never hijack one the user is working in), and navigate to `http://localhost:<fe_port>` using the port identified in Step 2. If the studies list renders, the session is warm — skip ahead. If `/login` renders, sign in with the local cognito-local super admin: `superadmin@example.com` / `superadmin`. Confirm by screenshot that the studies list rendered before continuing.
 
 ### Step 4 — Choose a target with real data
 
@@ -123,7 +137,7 @@ order by cnt desc limit 5;"
 
 The `user_org_roles_t` join matters: without it the query can hand you a document the acting user cannot open, which renders an ErrorPage with no clue why.
 
-Order is load-bearing. Navigate to `http://localhost:3000` and log in FIRST, then set the org (localStorage needs a loaded page on that origin — use `javascript_tool`):
+Order is load-bearing. Navigate to `http://localhost:<fe_port>` and log in FIRST, then set the org (localStorage needs a loaded page on that origin, and each port is a separate origin with its own localStorage — use `javascript_tool`):
 
 ```javascript
 localStorage.setItem('selectedOrgId', '<org_id>')
@@ -132,7 +146,7 @@ localStorage.setItem('selectedOrgId', '<org_id>')
 Then navigate to the target. Append `?chatAgent=1` — the chat panel is disabled by default and the query param self-persists, so no second localStorage write is needed:
 
 ```
-http://localhost:3000/studies/<study_id>/documents/<doc_id>/roadmap?chatAgent=1
+http://localhost:<fe_port>/studies/<study_id>/documents/<doc_id>/roadmap?chatAgent=1
 ```
 
 ### Step 5 — Mark the log position, then drive the browser
@@ -140,7 +154,7 @@ http://localhost:3000/studies/<study_id>/documents/<doc_id>/roadmap?chatAgent=1
 Persist the offset to a file; a shell variable will not survive to Step 6:
 
 ```bash
-wc -l < /tmp/peerai-be.log | tr -d ' ' > /tmp/peerai-be.offset
+wc -l < /tmp/peerai-be-<be_port>.log | tr -d ' ' > /tmp/peerai-be.offset
 ```
 
 `wc -l < file` pads with leading spaces on macOS — the `tr -d ' '` is required, not defensive.
@@ -156,7 +170,7 @@ A claim is confirmed when the planes agree. Any one alone can lie: the UI can re
 **Backend log — chat-agent turns only.** Events are compact JSON with a `chat_agent_event` anchor. Grep the anchor, not the logger name; SQL echo puts ~11k lines of noise in the same stream. `grep -o` is what strips the `[ts] INFO:chat_agent.events:` prefix, so keep that form. `+1` on the offset avoids replaying the last pre-existing line:
 
 ```bash
-tail -n +$(( $(cat /tmp/peerai-be.offset) + 1 )) /tmp/peerai-be.log \
+tail -n +$(( $(cat /tmp/peerai-be.offset) + 1 )) /tmp/peerai-be-<be_port>.log \
   | grep -o '{"chat_agent_event".*}' \
   | jq -c '{event, iteration, tool_name, success, terminated_reason, finish_reason}'
 ```
@@ -206,19 +220,22 @@ The run is complete when:
 3. `terminated_reason` was checked for any chat-agent turn.
 4. The browser console was checked for errors.
 5. Log-plane provenance was confirmed, or its absence declared.
-6. Anything started in Step 2 is either cleaned up or reported as still running.
+6. The checkout under test was named, and its branch confirmed to be the one carrying the feature.
+7. Anything started in Step 2 is either cleaned up or reported as still running.
 
 ## Cleanup
 
 ```bash
-kill $(cat /tmp/peerai-be.pid) 2>/dev/null && rm -f /tmp/peerai-be.pid
+kill $(cat /tmp/peerai-be-<be_port>.pid) 2>/dev/null && rm -f /tmp/peerai-be-<be_port>.pid
 ```
 
 Offer this; do not do it unprompted — the user may want the stack up. **Never kill a process you did not start.** Check its `cwd` first: a listener on a port you care about may belong to an entirely different project.
 
 ## Gotchas
 
-- **A port that answers is not the app you want.** Check the listener's `cwd`.
+- **A port that answers is not the app you want.** Check the listener's `cwd`, and check which checkout it is: the root, or a `.worktrees/<branch>` sibling. Never assume 3000/8081.
+- **Feature branches usually run as worktrees on shifted ports.** A root-pair run against a worktree feature passes while proving nothing. Pair an FE cwd with the BE cwd sharing the same trailing path.
+- **Each port is a separate localStorage origin.** `selectedOrgId` set on :3000 does not exist on :3001.
 - **`Module not found` for a file that exists means a stale dev server**, not a broken import. Check `etime` before debugging code.
 - **Shell state dies between Bash calls.** No `export PGPASSWORD` in one call and `psql` in the next; no `OFFSET=` reused later. Inline it or write it to a file. Pass `-w` to psql so a missing password fails fast instead of hanging on a prompt for the full tool timeout.
 - **`wc -l < file` pads with spaces** on macOS. Always `| tr -d ' '`.
