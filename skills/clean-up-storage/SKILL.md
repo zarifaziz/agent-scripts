@@ -15,7 +15,32 @@ Free disk space by deleting only things that rebuild themselves. Measure first, 
 4. Ask before the judgement tier.
 5. `df -h /` again and report the gain.
 
-The tiers matter more than the numbers. Sizes here are from a scan on 2026-08-25 (460 GB disk, 210 GB free after cleaning) and are examples, not expectations.
+The tiers matter more than the numbers. Sizes here are from a scan on 2026-08-25 (460 GB disk, 188 GB free before, 317 GB after) and are examples, not expectations.
+
+## Start with the whales
+
+Scan these three first. On 2026-08-25 they held 193 GB while every dev cache in this file combined held under 25 GB. Chasing `~/Coding` first wastes the session.
+
+```bash
+du -sh ~/Library/Group\ Containers/* 2>/dev/null | sort -rh | head -5
+docker system df
+du -sh ~/Library/Group\ Containers/group.net.whatsapp.WhatsApp.shared/* 2>/dev/null | sort -rh | head -3
+```
+
+**Docker via OrbStack** (`Group Containers/HUAQ24HBR6.dev.orbstack`) was 109 GB, almost all reclaimable. `docker system df` names the reclaimable share directly.
+
+```bash
+docker builder prune -af   # build cache
+docker image prune -af     # images no container references
+```
+
+OrbStack shrinks its sparse disk image on its own within a minute, no restart needed: 109 GB → 32 GB. Unused images re-pull on the next `docker compose up`, so this costs network time, not work.
+
+**WhatsApp media** (`Group Containers/group.net.whatsapp.WhatsApp.shared/Message`) reached 84 GB. Deleting it from the CLI leaves dangling media references in `ChatStorage.sqlite`, and anything not also on the phone is gone for good. Always offer the in-app route first (Settings → Storage and Data → Manage Storage), and only delete directly if the user picks that after hearing the tradeoff. Quit WhatsApp first.
+
+Expect `du` to overstate the win here. `du` reported 84 GB but `df` showed 29 GB reclaimed, because APFS clones share blocks that `du` counts once per file. Report the `df` delta, not the `du` figure.
+
+macOS lumps all of the above into **System Data** in Settings → Storage, which is why that number looks alarming and explains nothing. Group Containers is usually the answer.
 
 ## Scan
 
@@ -23,7 +48,7 @@ The tiers matter more than the numbers. Sizes here are from a scan on 2026-08-25
 df -h /
 
 # Where the space went, top level
-du -sh ~/Library/Application\ Support ~/Library/Caches ~/Coding ~/.cache ~/.local 2>/dev/null | sort -rh
+du -sh ~/Library/Group\ Containers ~/Library/Application\ Support ~/Library/Caches ~/Coding ~/.cache ~/.local 2>/dev/null | sort -rh
 
 # Drill into each
 du -sh ~/Library/Application\ Support/* 2>/dev/null | sort -rh | head -12
@@ -86,7 +111,15 @@ rm -rf ~/Library/Application\ Support/Notion/Partitions
 
 ## Never touch
 
-- **Git worktrees** — `~/Coding/auralis-app/.worktrees` and any other `.worktrees` dir. They may hold uncommitted work. To clean these, use the dedicated worktree-pruning skill, which checks merge status first.
+- **Git worktrees, without checking first** — `~/Coding/auralis-app/.worktrees` and any other `.worktrees` dir. Even a branch fully merged into `origin/main` can hold staged or untracked files that exist nowhere else. On 2026-08-25, two "fully merged, zero commits ahead" worktrees held an uncommitted `.gitattributes` and a 283-line draft plan. Before removing any worktree, check all three:
+
+```bash
+git -C <worktree> status --porcelain              # staged or untracked work
+git merge-base --is-ancestor <branch> origin/main # merged?
+git log --oneline origin/main..<branch>           # unpushed commits
+```
+
+  Copy anything `status` reports back into the main checkout, then `git worktree remove`. Worktrees are rarely worth much space anyway (the bulk is `node_modules`/`.venv`, which you can delete in place without removing the worktree).
 - **`~/.local/share/nvim`** — active config and plugins.
 - **Anything under a repo that is not a build artifact** — if in doubt, do not.
 
