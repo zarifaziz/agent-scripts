@@ -27,16 +27,17 @@ cd ~/Coding/agent-scripts
 ./setup.sh
 ```
 
-`setup.sh` symlinks the repo into `~/.claude/`:
+`setup.sh` links each skill and command into `~/.claude/` on its own:
 
 | Symlink | Target |
 |---------|--------|
-| `~/.claude/skills`   | `agent-scripts/skills`   |
-| `~/.claude/commands` | `agent-scripts/commands` |
+| `~/.claude/skills/<name>`      | `agent-scripts/skills/<name>`      |
+| `~/.claude/commands/<name>.md` | `agent-scripts/commands/<name>.md` |
 
-The script is idempotent and refuses to clobber existing non-matching paths —
-re-running on an already-configured machine prints `ok:` for each link and exits
-cleanly.
+One link per item, so `~/.claude/skills` can also hold skills from other repos
+such as peer-agent-scripts. The script is idempotent: re-running prints `ok` for
+each existing link. A name already linked somewhere else is reported as
+`CONFLICT` and left alone; `./setup.sh --force` takes it over.
 
 Restart Claude Code after first install so it re-scans both dirs.
 
