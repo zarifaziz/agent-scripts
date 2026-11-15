@@ -94,17 +94,23 @@ Format, exactly:
 PRs needing review :pray:
 
 Re-review
+
 https://github.com/peertechbio/peer-api-svc/pull/889  (re-review: Box check done)
 
 <Topic in plain words>
+
 https://github.com/peertechbio/peer-fe/pull/1064
+
 https://github.com/peertechbio/peer-fe/pull/1072  (stacked on #1064)
 
 AI collective PRs
+
 https://github.com/peertechbio/peer-api-svc/pull/909
 ```
 
-- Raw URLs, one per line. No tables, no markdown links, no titles after the URL.
+- Raw URLs, each on its own line with a blank line after every heading and every URL.
+  Adjacent lines paste into Notion as one run-on string. No tables, no markdown links,
+  no titles after the URL.
 - Mark a stacked PR with `(stacked on #N)`.
 - No version labels like "v0", and never the words "seam" or "nits".
 
