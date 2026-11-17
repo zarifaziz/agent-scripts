@@ -1,6 +1,6 @@
 ---
 name: pr-review-post
-description: Draft Zarif's "PRs needing review :pray:" post for the PeerAI #eng Slack channel from his open peertechbio PRs, grouped by topic with raw links, and flag any PR that a reviewer can't act on yet. Use when asked for "my PRs that need review", "PRs needing review", "the eng channel post", "PRs to post on #eng", "bump my PRs", or "draft my review post".
+description: Draft Zarif's "PRs needing review :thankyou:" post for the PeerAI #eng Slack channel from his open peertechbio PRs, grouped by topic with raw links, and flag any PR that a reviewer can't act on yet. Use when asked for "my PRs that need review", "PRs needing review", "the eng channel post", "PRs to post on #eng", "bump my PRs", or "draft my review post".
 ---
 
 # PR review post
@@ -91,7 +91,7 @@ with keywords `PRs needing review` or `ready for review`. Read its thread.
 Format, exactly:
 
 ```
-PRs needing review :pray:
+PRs needing review :thankyou:
 
 Re-review
 
