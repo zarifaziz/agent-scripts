@@ -94,23 +94,22 @@ Format, exactly:
 PRs needing review :thankyou:
 
 Re-review
-
 https://github.com/peertechbio/peer-api-svc/pull/889  (re-review: Box check done)
 
 <Topic in plain words>
-
 https://github.com/peertechbio/peer-fe/pull/1064
-
 https://github.com/peertechbio/peer-fe/pull/1072  (stacked on #1064)
 
 AI collective PRs
-
 https://github.com/peertechbio/peer-api-svc/pull/909
 ```
 
-- Raw URLs, each on its own line with a blank line after every heading and every URL.
-  Adjacent lines paste into Notion as one run-on string. No tables, no markdown links,
-  no titles after the URL.
+- Raw URLs, each on its own line. The heading and its URLs sit on consecutive lines
+  with no blank line between them; one blank line separates each group. Blank lines
+  between URLs show as big gaps in Slack. No tables, no markdown links, no titles
+  after the URL.
+- The post must go in a code block (step 5). Outside one, the terminal joins
+  consecutive lines into one run-on string.
 - Mark a stacked PR with `(stacked on #N)`.
 - No version labels like "v0", and never the words "seam" or "nits".
 
