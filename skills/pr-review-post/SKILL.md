@@ -108,14 +108,12 @@ https://github.com/peertechbio/peer-api-svc/pull/909
   with no blank line between them; one blank line separates each group. Blank lines
   between URLs show as big gaps in Slack. No tables, no markdown links, no titles
   after the URL.
-- The post must go in a code block (step 5). Outside one, the terminal joins
-  consecutive lines into one run-on string.
 - Mark a stacked PR with `(stacked on #N)`.
 - No version labels like "v0", and never the words "seam" or "nits".
 
 ## 5. Report
 
-Put the post in a code block. Below it, give one line each for:
+Give the post as plain lines at column 0, with no code block, quote or indent. Below it, give one line each for:
 - Approved PRs left out, ready to merge
 - Flagged PRs, with the flag
 - Drafts
